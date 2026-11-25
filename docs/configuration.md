@@ -1,8 +1,6 @@
 # Configuration
 
-parakit reads an optional TOML file for daemon defaults, cleaning behavior, transcription logging, Linux insertion and hotkey backends, and user-defined cleaning rules. A missing file is valid and selects built-in defaults.
-
-For example, keep sentence-final periods and raise the number-conversion threshold to five:
+Save this TOML at the path printed by `parakit config path` to keep sentence-final periods and leave ordinary numbers below five spelled out.
 
 ```toml
 [cleaning]
@@ -10,12 +8,7 @@ keep_trailing_period = true
 number_threshold = 5
 ```
 
-Save this [starter config](example.toml) at the path printed by `parakit config path`. The [annotated reference](config_reference.toml) lists the keys, defaults, accepted values, and interactions. Inherited process settings are listed under [environment variables](#environment-variables).
-
-To fix a word parakit often transcribes incorrectly, follow the [word replacement recipe](cleaning-rules.md#word-replacements).
-
-> [!IMPORTANT]
-> The daemon reads this file once at startup and does not watch it. Restart the daemon after every edit.
+Download the [starter config](example.toml) or browse the [available TOML settings](config_reference.toml) and [environment variables](#environment-variables). To fix a word parakit often transcribes incorrectly, see [word replacements](cleaning-rules.md#word-replacements).
 
 ## File Location
 
@@ -25,63 +18,43 @@ parakit resolves one config path:
 2. Linux and macOS: `$XDG_CONFIG_HOME/parakit/config.toml`, or `$HOME/.config/parakit/config.toml` when `XDG_CONFIG_HOME` is unset or empty.
 3. Windows: `%APPDATA%\parakit\config.toml`.
 
-Setting `PARAKIT_CONFIG_PATH` to an empty value is an error. So is pointing it at a file that does not exist: `start`, `doctor`, `rules`, and `config show` refuse to run on defaults in that case, while `config path`, `config init`, and `config edit` still work so the file can be created. A relative override path stays relative to the process working directory. All configured paths, including `PARAKIT_CONFIG_PATH`, `daemon.model`, and `logging.dir`, are used literally; parakit does not expand `~` or environment variables inside them. On Linux and macOS, resolution fails with `HOME is unset or empty` when neither `XDG_CONFIG_HOME` nor `HOME` is set to a nonempty value.
+An absent file at the default location uses the built-in defaults. An empty `PARAKIT_CONFIG_PATH` prevents path resolution. When it names a missing file, commands that load the config fail until you create the file or unset the override. Use `parakit config init` to create it. The path conventions in the [config reference](config_reference.toml) also apply to this override.
 
 ## Commands
 
-```bash
-parakit config path
-parakit config init
-parakit config show
-parakit config edit
-```
+| Command | Result |
+| --- | --- |
+| `parakit config path` | Print the selected path without reading the file. |
+| `parakit config init` | Create the parent directories and a template. Pass `--force` to overwrite an existing file. |
+| `parakit config show` | Validate the file and display resolved values. Bare `parakit config` does the same. |
+| `parakit config edit` | Open the file with the [configured editor](#editor), creating the template first if needed. |
 
-`config path` prints the resolved path without reading the file. `config init` creates any missing parent directories and writes a template with commented examples. `config show`, which is also what bare `parakit config` runs, loads and validates the file and prints the resolved path plus the effective value of every key. `config edit` writes the template first when the file is missing, then opens the file with the [configured editor](#editor).
+`config show` prints a summary of file settings merged with built-in defaults. Use `parakit --verbose status` to inspect the [running daemon's settings](running.md#daemon-control). On Linux, the config summary lists the configured [insertion and hotkey backends](linux-desktop.md#insertion-selection-and-recovery). With `daemon.model` set, it reports the preset as inapplicable and precision as `(from model file)`.
 
-On Linux, `config show` also includes the selected insertion and hotkey backends. See [Linux desktop input](linux-desktop.md#insertion-selection-and-recovery) for transport selection and setup.
-
-### Details
-
-`config init` refuses to replace an existing file. `config init --force` truncates and overwrites it, so use it only when losing the current contents is intended.
-
-`config show` reports the config file merged with built-in defaults. It does not merge CLI flags, so a one-off `parakit start --device cpu` does not appear there, and the output is a summary rather than a round-trippable config. With `daemon.model` set, it reports `model_preset: (not applicable: local model)` and `quantize: (from model file)`.
-
-`--quiet config show` prints nothing but still resolves, loads, and validates the config file, so it can be used as a silent validation command. `--quiet` likewise silences `config path` and the `wrote <path>` line from `config init`, though those commands still perform their normal path resolution and file operations.
+Use `parakit --quiet config show` to validate without stdout. The flag also suppresses normal stdout from `config path` and `config init`.
 
 ### Editor
 
 `config edit` uses `$VISUAL`, falling back to `$EDITOR` when `VISUAL` is unset, empty, or whitespace-only. The value is split into an executable plus arguments using shell-style quoting, then launched directly with the config path appended. `EDITOR="code -w"` therefore works without invoking a shell. If both variables are blank or unset, the command prints the path to edit by hand and exits with an error.
 
-The editor can repair a broken config, but its exit does not validate the file. Follow the [edit and validation loop](#validation-and-recovery).
-
 ## Precedence and Loading
 
-The [config reference](config_reference.toml) describes precedence, CLI overrides, and settings available only in the file. Check cleaning changes with the [rules commands](cleaning-rules.md#inspect-and-test) before restarting.
-
-For Qwen model selection, language hints, and context, see the [Qwen3-ASR guide](models/qwen3-asr.md). Other presets are listed under [model selection](running.md#model-presets).
-
-TOML, unknown-key, invalid-value, and rule-validation errors name the config path.
-
-A negative or non-finite number threshold reports `number threshold must be a finite value greater than or equal to 0 (got <value>)`. Empty CLI paths (`-m ""` and `--log-dir ""`) are rejected during argument parsing, before configuration is loaded.
+See the [config reference](config_reference.toml) for precedence, validation errors, and the CLI overrides for each key. Empty CLI paths (`-m ""` and `--log-dir ""`) fail during argument parsing.
 
 ## Preserving Repeated Words
 
-Add literal words or phrases to the built-in repetition exceptions. For example, `tomato` preserves deliberate `tomato tomato` dictation:
+Add `repetition_exceptions` to your `[cleaning]` table to retain deliberate repeats such as `tomato tomato`.
 
 ```toml
 [cleaning]
 repetition_exceptions = ["tomato", "paddle", "chinny chin chin"]
 ```
 
-Merge the assignment into your existing `[cleaning]` section if you already have one. The [repetition-exception constraints](config_reference.toml) apply to each literal entry.
-
-Other cleaning rules still apply, including the aggressive profile's separate ambiguous-repetition pass. Use `parakit rules test` to check the result before restarting.
+See the [config reference](config_reference.toml) for what counts as a literal exception. The [aggressive repeated-word pass](cleaning-rules.md#casual-forms-and-stutters) runs independently.
 
 ## Validation and Recovery
 
-`parakit config show` catches TOML and configuration errors. Daemon startup additionally checks machine-dependent resources such as the model file, compute device, insertion backend, hotkey, audio, and permissions. The [log directory is opened lazily](logging.md), so neither `config show` nor startup can prove it is writable.
-
-Use this edit loop for cleaning and user-rule changes:
+The daemon reads the file once at startup. Use `config show` to check each edit. When changing cleanup rules, also preview a representative dictation and check which rules are active.
 
 ```bash
 parakit config edit
@@ -90,15 +63,13 @@ parakit rules test "A representative dictation to clean."
 parakit rules list
 ```
 
-When the result is right, run `parakit stop`, then start it with your usual [foreground or background command](running.md#background-use), including any CLI overrides you normally use.
+Run `parakit stop` and start it again with your usual [command and flags](running.md#background-use). Startup checks the model file, device, desktop input, microphone, and permissions. [Logging](logging.md) checks its output directory when a record is ready to write.
 
-A broken config does not block repair or control commands that do not need daemon settings: `fetch`, `cache`, `config path`, `config init`, `config edit`, `status`, `stop`, `copy-last`, `history`, `test-paste`, and Linux `ibus` commands. `config show`, `doctor`, `rules list`, `rules test`, PTT simulation, and daemon startup do load it.
+`config show`, `doctor`, `rules`, daemon startup, and PTT simulation load the file. You can repair invalid TOML with `config edit` and stop a running daemon with `parakit stop`. The other config and daemon control commands, `fetch`, `cache`, and Linux `ibus` commands run independently of the file contents.
 
 ## Environment Variables
 
-These are inherited process settings, not TOML keys. Parakit does not load a `.env` file.
-
-For build-time settings, see [building](build.md).
+Set these variables in the launching environment. If you store them in an environment file such as `.env`, load it before starting parakit. See [building](build.md) for build-time settings.
 
 ### `PARAKIT_CONFIG_PATH`
 
@@ -106,28 +77,25 @@ Config-file override. See [path selection and missing-file behavior](#file-locat
 
 ### `PARAKIT_MODELS_DIR`
 
-Directory that holds downloaded models. Used verbatim when set. Empty is an error. A relative path is relative to the working directory.
-The default paths are listed under [model cache](running.md#model-cache).
-Read only by commands that touch the model cache: `fetch`, `cache`, and daemon startup when a preset or the default model is selected. It is not consulted when the selected model is an explicit local path.
+See [model cache paths](running.md#model-cache).
 
 ### `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `HOME`
 
-On Linux and macOS, `XDG_CONFIG_HOME` supplies the [config base](#file-location), while `XDG_CACHE_HOME` supplies the [model cache base](running.md#model-cache) and the runtime fallback below. Relative values are used as given, and empty values count as unset. `HOME` supplies the fallback base when the relevant XDG variable is absent or empty; without either base, path resolution fails with `HOME is unset or empty`. An explicit `PARAKIT_CONFIG_PATH` bypasses config-base resolution.
+On Linux and macOS, `XDG_CONFIG_HOME` selects the [config base](#file-location). `XDG_CACHE_HOME` selects the base for the [model cache](running.md#model-cache) and the runtime fallback below. Relative values are used as given. If the relevant XDG variable is empty or unset, parakit uses `HOME` and reports `HOME is unset or empty` when that is unavailable.
 
 ### `XDG_RUNTIME_DIR`
 
-Linux. Directory whose parakit subdirectory holds the daemon lock file (parakit.lock) and control socket (control.sock). An empty value counts as unset.
-Fallback: `$XDG_CACHE_HOME/parakit/run`, or `$HOME/.cache/parakit/run`. macOS always uses that fallback. Windows keeps the lock in `parakit\run` inside Local AppData and talks over a named pipe.
-The control commands (`status`, `stop`, `copy-last`, `history`, `test-paste`) and the daemon must resolve the same directory to find each other.
-The socket directory must be owned by you, and parakit sets it to mode 0700.
+On Linux, `$XDG_RUNTIME_DIR/parakit` holds `parakit.lock` and `control.sock`. If the variable is unset or empty, parakit uses `$XDG_CACHE_HOME/parakit/run` or `$HOME/.cache/parakit/run`. macOS uses the cache fallback. Windows keeps the lock in `parakit\run` inside Local AppData and uses a named pipe for control.
+
+On Unix, the socket directory must belong to you. Parakit sets its mode to 0700. A `path must be shorter than SUN_LEN` error means the full socket pathname is too long. Use a shorter runtime directory on Linux or a shorter cache root on macOS. Start the daemon and run [control commands](running.md#daemon-control) with the same path settings.
 
 ### `VISUAL`
 
-Editor for `parakit config edit`, tried before EDITOR; [selection and command parsing](configuration.md#editor).
+First choice for `parakit config edit`. See [editor selection](#editor).
 
 ### `EDITOR`
 
-Editor fallback for `parakit config edit`; see VISUAL above.
+Fallback for `parakit config edit`. See [editor selection](#editor).
 
 ### `DISPLAY`
 
@@ -136,8 +104,7 @@ Inherit it from the desktop session. An XWayland DISPLAY never enables XTest ins
 
 ### `XDG_SESSION_TYPE`
 
-Linux. A value of "wayland" in any case selects Wayland session handling: automatic hotkeys use IBus and X11 insertion is unavailable.
-An empty value counts as present, so it also disables the WAYLAND_DISPLAY fallback below.
+Linux. A case-insensitive `wayland` selects Wayland session handling. See [Linux desktop input](linux-desktop.md). An empty value counts as present for the `WAYLAND_DISPLAY` check.
 
 ### `WAYLAND_DISPLAY`
 
@@ -190,15 +157,11 @@ Native Qwen quantizer override. A nonempty value not starting with 0 allows audi
 
 ### `CUDA_VISIBLE_DEVICES`
 
-CUDA builds. Read by the CUDA runtime, not by parakit. A comma-separated list of NVIDIA GPU indices or UUIDs that CUDA may use; an empty value hides all CUDA devices.
-Visibility controls affect only their named backend. In bundled builds, daemon.device "auto" falls back to CPU and "gpu" fails at startup only when no GPU remains visible across enabled backends. `parakit --verbose doctor` lists visible devices.
-There is no per-device config key or command-line flag, because the Parakeet backend ignores CrispASR's device index.
+The CUDA runtime accepts a comma-separated list of NVIDIA GPU indices or UUIDs. An empty value hides all CUDA devices. Each visibility variable affects only its own backend. See [device selection](running.md#device-selection) for how parakit uses visible devices.
 
 ### `GGML_VK_VISIBLE_DEVICES`
 
-Vulkan builds. Read by ggml's Vulkan backend, not by parakit. A comma-separated list of indices into the Vulkan driver's physical-device list (the GPU0, GPU1 order of `vulkaninfo --summary`) limits which devices Vulkan may use.
-The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from these indices.
-An empty value hides all Vulkan devices; an invalid index disables the Vulkan backend. Other backends follow the visibility rule above.
+The Vulkan backend accepts a comma-separated list of physical-device indices in the GPU0, GPU1 order of `vulkaninfo --summary`. An empty value hides all Vulkan devices. An invalid index disables the Vulkan backend. The Vulkan0, Vulkan1 names in `parakit --verbose doctor` number only the visible devices, so they can differ from driver indices.
 
 ### `HF_ENDPOINT`
 

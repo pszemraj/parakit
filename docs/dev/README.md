@@ -1,18 +1,16 @@
-# Development Notes
-
-Source-coverage setup and report commands are in [quality.md#rust-source-coverage](quality.md#rust-source-coverage).
+# Maintainer Workflows
 
 ## Model Artifacts
 
-Use the [preset artifact names](../running.md#model-presets) for maintainer uploads, without nested directories or model-card-only links. Keep F16 source GGUFs, including v3's `parakeet-tdt-0.6b-v3-F16.gguf`, for future re-quantization. Follow the [model comparison procedures](quality.md#qwen-and-moondream-comparisons) for F16 and official-runtime checks.
+Upload GGUFs at the repository root under their [preset artifact names](../running.md#model-presets). Keep F16 source GGUFs, including `parakeet-tdt-0.6b-v3-F16.gguf`, for future re-quantization. Validate artifacts against the original runtimes. [Model comparisons](quality.md#recommended-ab-procedure)
 
 The Parakeet converter, loader, and `crispasr-quantize` path are built around F16/F32 tensors. Treat BF16 as future work until it has explicit support and validation.
 
 ## Source Rebuild
 
-Conversion tools are installed separately from Parakit. `fetch --quantize q6_k` needs `crispasr-quantize` (`crispasr-quantize.exe` on Windows) on `PATH`. `fetch --from-source` also needs the applicable `convert-parakeet-to-gguf.py` or `convert-qwen3-asr-to-gguf.py` on `PATH`; automatic Qwen/Moondream checkpoint downloading needs `download_asr_checkpoint.py`. Scripts are found as files on `PATH` and run with Python, so they do not need executable permissions.
+Hosted Q8_0 downloads use the Parakit executable alone. Install `crispasr-quantize` (`crispasr-quantize.exe` on Windows) on `PATH` to prepare Q6_K or rebuild from source. A source rebuild also searches `PATH` for `python3` or `python`, the converter for the selected model, and `download_asr_checkpoint.py` when downloading Qwen or Moondream checkpoints. Parakit passes the scripts to Python, so they need only be readable.
 
-From a checkout with the pinned submodule, build the optional quantizer explicitly and copy the tools to a separately maintained directory. This example uses a prefix of your choice:
+Build the quantizer from the pinned submodule and install the tools into a directory on `PATH`.
 
 ```bash
 cmake -S vendor/CrispASR -B target/conversion-tools \
@@ -28,15 +26,15 @@ cp vendor/CrispASR/models/convert-parakeet-to-gguf.py \
 export PATH="$tool_prefix/bin:$PATH"
 ```
 
-On Windows, build the same CMake target and copy its `crispasr-quantize.exe` plus the Python scripts to a directory on `PATH`; a multi-config generator can put the executable under `bin/Release/`. Native quantizer and accelerator prerequisites remain those of the selected CrispASR build. These installed tools do not depend on the original Parakit checkout. Ordinary builds do not compile the CrispASR examples.
+On Windows, copy `crispasr-quantize.exe` and the Python scripts into a directory on `PATH`. With a multi-config generator, look under `bin/Release/` for the executable. Use the native prerequisites for the selected CrispASR build. The installed tools work independently of the checkout.
 
-Install the conversion dependencies once in the Python environment used by `fetch`:
+Install the conversion dependencies in the Python environment used by `fetch`.
 
 ```bash
 python -m pip install -r scripts/requirements-convert.txt
 ```
 
-Rebuild Ultra, Redux, NVIDIA v3, or Qwen from its original checkpoint:
+Select a preset to rebuild from its original checkpoint.
 
 ```bash
 # Default Ultra, from Moondream.
@@ -67,15 +65,13 @@ parakit fetch --from-source --model-preset qwen3-asr-1.7b \
   --checkpoint-dir /path/to/Qwen3-ASR-1.7B --keep-f16
 ```
 
-This directory must contain the original checkpoint and tokenizer/configuration files, not a GGUF. It requires `--from-source` with a Qwen or Moondream preset. The pipeline never removes the supplied directory.
+Supply the original weights, tokenizer, and configuration files. `--checkpoint-dir` requires `--from-source` with a Qwen or Moondream preset and leaves the supplied directory intact.
 
-A completed Q8_0 artifact in the preset cache is reused before checking Python dependencies or accessing the network. `--keep-f16` does not create a missing F16 intermediate on that cache hit. If only F16 is cached, it is quantized without re-reading the checkpoint, including a supplied `--checkpoint-dir`. Add `--force` to repeat conversion and quantization; downloaded checkpoints are refreshed from the same pinned source revision. Qwen and Moondream presets record fixed provider and source commits in the model catalog. A new catalog revision uses a separate checkpoint directory, preventing stale shards from another revision entering conversion. Rebuilt Q8_0 goes to the same destination as the hosted preset: `parakit start --model-preset NAME` selects it without changing daemon configuration or the application default. Source rebuilding produces Q8_0; the [cached Q6_K workflow](../running.md#model-presets) uses provider F16 instead.
+A completed Q8_0 cache hit bypasses the Python dependency check and network access. `--keep-f16` preserves an F16 intermediate if one already exists. If only F16 is cached, Parakit quantizes it directly. Use `--force` to repeat conversion and quantization from the supplied snapshot or the pinned source revision. Each pinned Qwen or Moondream source revision gets its own checkpoint directory. The rebuilt Q8_0 occupies the hosted preset's cache path and is selected by `parakit start --model-preset NAME`. [Q6_K preparation](../running.md#model-presets)
 
 Redux conversion reconstructs its packed ternary weights into F16 before Q8_0 quantization. See the [Redux limitations](../running.md#model-presets) and [conversion acceptance checks](quality.md#checkpoint-conversion-acceptance).
 
 Missing tools report their filename and installation guidance before starting conversion.
-
-GPU build and runtime checks are in [quality.md#gpu-feature-validation](quality.md#gpu-feature-validation).
 
 ## Deferred Runtime Work
 
@@ -105,7 +101,7 @@ TODO: Run the full Windows BLAS/thread benchmark matrix for CPU builds, includin
 
 TODO: Complete the remaining [native model and physical desktop checks](model-validation.md), including target-gated Linux and Windows transports and input backends. CI remains limited to static checks unless its scope and cost are separately agreed.
 
-## Updating [CrispASR](https://github.com/CrispStrobe/CrispASR)
+## Updating CrispASR
 
 Update the native source, its nested submodules, both local binding manifests, and `Cargo.lock` together. Keep the binding package versions aligned with upstream. Review changes to the session ABI, model setters, ggml device registry, loader, and platform-specific linkage before changing the pin.
 
@@ -121,6 +117,6 @@ git add vendor/CrispASR native/crispasr/Cargo.toml native/crispasr-sys/Cargo.tom
 cargo check --locked
 ```
 
-The root `cargo check` refreshes `Cargo.lock`; `cargo check --locked` verifies it. Review each source anchor in `build/native_correctness.rs` against the new native source, retaining corrections until upstream provides equivalent behavior. Rebuild the native library for validation; an older cached library cannot exercise the upgraded source. Follow the [build guide's ABI, header, and bundled-correction requirements](../build.md#crispasr-and-backends), then the [Rust validation loop](quality.md#rust-validation-loop) before committing.
+The first `cargo check` refreshes `Cargo.lock` and the locked check verifies it. Review the source anchors in `build/native_correctness.rs` against the new native source. Keep each correction until upstream provides equivalent behavior. Build the new native library under the [ABI and header requirements](../build.md#crispasr-and-backends) and run the [Rust validation loop](quality.md#rust-validation-loop).
 
-Check the PCM input contract, segment-text handling, runtime defaults, and model preprocessing/orchestration when upstream behavior changes. The daemon and `transcribe-file` initialize native defaults before threads or model opening. Library callers can call `initialize_crispasr_runtime_defaults` at that point or set the equivalent environment variables before native initialization. See the [model validation guide](model-validation.md) for current build, inference, and desktop checks.
+Check the PCM input contract, segment text, runtime defaults, and model preprocessing against the new pin. [Native model validation](model-validation.md)

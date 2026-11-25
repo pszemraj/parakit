@@ -1,7 +1,7 @@
 # config_reference.toml: every accepted TOML key. Form: loadable, using the built-in defaults.
 # Commented assignments show examples. Start from [example.toml](example.toml).
 # Config location and commands: [configuration](configuration.md#file-location).
-# Read once at startup. Restart the daemon after edits.
+# Apply edits with the [validation and restart workflow](configuration.md#validation-and-recovery).
 # Precedence: command-line flags > this file > built-in defaults. Flags below belong to `parakit start` unless stated.
 # Unknown keys, wrong types, invalid TOML, and constraints fail load with the config path, except stated startup checks.
 # Constraints are checked even for disabled features, unused model settings, and disabled user rules.
@@ -14,7 +14,7 @@
 
 # ---------- Daemon ----------
 # CLI model selection replaces configured selection. Configured conflicts still fail load.
-# Config: daemon.model conflicts with daemon.model_preset and daemon.quantize. CLI: --model conflicts with --model-preset and --quantize.
+# daemon.model conflicts with daemon.model_preset and daemon.quantize. The matching CLI flags have the same constraint.
 # Daemon keys take matching CLI overrides except transcript_history. Global diagnostics are described under verbose.
 # doctor also accepts --paste-mode and, on Linux, --insertion-backend and --hotkey-backend for that check only.
 
@@ -30,7 +30,7 @@
 # model_preset = "qwen3-asr-1.7b"
 
 # "q8_0" | "q6_k" (optional). Preset precision, ignored with CLI -m/--model.
-# Unset: hosted q8_0. CLI --quantize conflicts with -m/--model.
+# Unset: hosted q8_0.
 # Warning: preparing q6_k needs an external quantizer and may download a large F16 model. [Preparation](running.md#model-presets).
 # quantize = "q6_k"
 
@@ -66,7 +66,7 @@ keep_transcript_clipboard = false
 # See: [cue timing and playback failures](running.md#logging-and-sounds).
 sounds = true
 
-# bool. Enable [diagnostics](running.md#first-run) for start, doctor, and rules. Global --verbose enables them and --quiet wins.
+# bool. Enable start and doctor diagnostics or native-library diagnostics for rules. Global --verbose enables diagnostics and --quiet wins.
 verbose = false
 
 # integer in [0, 100]. Retained transcripts in memory, cleared on stop.
@@ -114,6 +114,7 @@ profile = "safe"
 # bool (optional). Repair function-word sentence breaks and commas.
 # Unset: enabled for Qwen models only. true enables it for every model, false disables it.
 # Overridden by: --phrase-breaks true/false (also on rules). disabled_rules still takes precedence.
+# See: [function-word punctuation](cleaning-rules.md#function-word-punctuation).
 # phrase_breaks = true
 
 # bool. Keep a single final period instead of applying fix-trailing-period.
@@ -157,13 +158,12 @@ backend = "auto"
 # Repeat [[rules.user]] for each regex replacement. The default is no user rules.
 # Uncomment the table header with its keys, or they land in the preceding table.
 # Entries follow cleaning.enabled, not cleaning.profile. Within each position they run in file order.
-# Enabled patterns compile once. Hits are logged by rule name and non-overlapping count. [Log identity](logging.md#transcription-record-fields).
+# See: [rule hits and log identity](logging.md#transcription-record-fields).
 
 # [[rules.user]]
 # string (required). Nonblank name without edge whitespace, unique among user, built-in and generated word-replacement names. Case-sensitive.
 # name = "weights-and-biases-to-wandb"
 # string (optional). Description displayed by `rules list`, without behavioral effect.
-# Unset: blank.
 # description = "Map 'weights and biases' to 'wandb'"
 # string (required). Nonempty Rust regex (whitespace-only is legal), case-sensitive unless (?i). No lookaround or backreferences.
 # Anchors ^/$ match the whole transcript unless (?m). All non-overlapping matches are replaced.

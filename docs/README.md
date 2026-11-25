@@ -2,27 +2,22 @@
 
 ## Setup
 
-- [build.md](build.md) - building from source and native dependencies per platform.
-- [macos-desktop.md](macos-desktop.md) - macOS permissions, the hotkey, and the paste-acknowledgement step.
-- [linux-desktop.md](linux-desktop.md) - IBus setup, focused-field GNOME Wayland dictation, and X11 fallback.
-- [windows-desktop.md](windows-desktop.md) - Windows hotkey registration, insertion, and `doctor --deep`.
-- [Windows bundle scripts](../scripts/windows/README.md) - packaging a runnable Windows bundle.
+- [Install and build](build.md) on Linux, macOS, or Windows.
+- [Linux desktop input](linux-desktop.md) covers IBus on GNOME Wayland and hotkey capture on X11.
+- [macOS desktop setup](macos-desktop.md) covers permissions, hotkeys, and paste confirmation.
+- [Windows desktop setup](windows-desktop.md) covers microphone access, hotkeys, and insertion. Use the [bundle scripts](../scripts/windows/README.md) to package or install a Windows build.
 
 ## Daily Use
 
-- [running.md](running.md) - running the daemon, daemon control, the model cache, and paste modes.
-- [models/qwen3-asr.md](models/qwen3-asr.md) - Qwen model setup, language controls, prior-dictation context, and long-audio behavior.
-- [configuration.md](configuration.md) - the config file, CLI precedence, and inherited environment variables.
-- [example.toml](example.toml) - a minimal starter config with a comment on each choice.
-- [config_reference.toml](config_reference.toml) - the per-key configuration reference, itself a loadable config that holds every default.
-- [cleaning-rules.md](cleaning-rules.md) - word replacements, transcript cleanup profiles, and regex rules.
-- [logging.md](logging.md) - the JSONL transcription and insertion log schema.
-- [troubleshooting.md](troubleshooting.md) - symptom-first fixes for common problems.
+- [Run and control the daemon](running.md), choose a model, and configure insertion.
+- [Use Qwen3-ASR](models/qwen3-asr.md) with a forced language or context from earlier dictations.
+- [Configure parakit](configuration.md) with the [starter config](example.toml) or look up an option in the [TOML reference](config_reference.toml).
+- [Clean transcripts](cleaning-rules.md) with profiles, word replacements, and regex rules.
+- [Log dictations](logging.md) and interpret transcription and insertion records.
+- [Troubleshoot](troubleshooting.md) hotkeys, the microphone, insertion, and model downloads.
 
 ## Development
 
-- [dev/architecture.md](dev/architecture.md) - module map and platform work.
-- [dev/quality.md](dev/quality.md) - validation and quality checks.
-- [dev/model-validation.md](dev/model-validation.md) - native model, resampler, bundle, and physical desktop checks.
-- [dev/memory.md](dev/memory.md) - session ownership, memory accounting, and reload diagnostics.
-- [dev/README.md](dev/README.md) - maintainer notes.
+- [Architecture](dev/architecture.md) and [model memory](dev/memory.md)
+- [Validation and quality checks](dev/quality.md) and [native platform checks](dev/model-validation.md)
+- [Model conversion and CrispASR maintenance](dev/README.md)

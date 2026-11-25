@@ -1,97 +1,77 @@
 # macOS Desktop Setup
 
-parakit supports Apple Silicon macOS as a terminal-run CLI. Build from source, grant the launching app the required privacy permissions, then run `parakit` from that app.
-
 ## Build
 
-Follow the [Apple Silicon installation instructions](build.md#install), selecting `--features metal` for GPU inference. Metal is opt-in; a default build runs on CPU. Build dependencies, installed-library checks, and Rosetta constraints are covered in the build guide.
+Install from a native Apple Silicon terminal. See [installation and Metal builds](build.md#install).
 
 ## Permissions
 
-Grant these in System Settings > Privacy & Security:
+In System Settings > Privacy & Security, grant the launching terminal app access to Accessibility for hotkeys and synthetic events, and to Microphone for capture. See Apple's [Accessibility](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac) and [Microphone](https://support.apple.com/guide/mac-help/control-access-to-the-microphone-on-mac-mchla1b1e1fe/mac) instructions.
 
-- [Accessibility](https://support.apple.com/guide/mac-help/allow-accessibility-apps-to-access-your-mac-mh43185/mac): required for the `Left Control+Space` hotkey and synthetic paste/type events.
-- [Microphone](https://support.apple.com/guide/mac-help/control-access-to-the-microphone-on-mac-mchla1b1e1fe/mac): required for audio capture.
+Accessibility grants the modifying CoreGraphics event tap used for the hotkey. Doctor reports Input Monitoring for diagnostics only. See [Apple's explanation of event-tap permissions](https://developer.apple.com/videos/play/wwdc2019/701/).
 
-Parakit uses a modifying CoreGraphics event tap to suppress the hotkey. [Apple distinguishes this Accessibility-controlled tap from listen-only taps](https://developer.apple.com/videos/play/wwdc2019/701/), which require Input Monitoring. `doctor` reports the separate Input Monitoring status for diagnostics; it does not require that grant.
-
-For ordinary terminal launches, macOS attributes permission requests to the terminal application, such as Terminal.app, iTerm2, or Ghostty. Run `doctor` from the same app you use to launch parakit; results from another terminal, an editor, or a coding agent do not establish that launcher's access.
-
-From that terminal, check readiness before the [first run](running.md#first-run):
+Check readiness in the same terminal app you use to launch Parakit.
 
 ```bash
 parakit doctor
 ```
 
-If Accessibility is missing, `doctor` can trigger the macOS prompt. After granting it, restart parakit and rerun `parakit doctor`. If Microphone is not determined yet, the first capture may trigger its prompt; rerun parakit after granting it.
-
-If Accessibility is already enabled but `doctor` reports denied, save terminal work, fully quit and reopen the launching app, then rerun `parakit doctor`. An app updated on disk can still have an older process running; the enabled Settings entry does not establish effective access for that process. Try this before resetting permissions.
+`doctor` can trigger the Accessibility prompt. The first capture can trigger the Microphone prompt. Restart Parakit after granting access, then continue with the [first run](running.md#first-run).
 
 ### Recovering From a Denied Prompt
 
-> [!TIP]
-> macOS remembers a denied or dismissed permission request and may not show the prompt again automatically. You are not locked out: quit parakit, open the relevant Privacy & Security pane linked above, and enable the terminal application that launches parakit. In the Accessibility pane, use the Add button if the terminal is not listed. Then restart the terminal application and rerun `parakit doctor`.
+macOS remembers denied or dismissed requests. Enable the terminal app in the relevant pane, using Add in the Accessibility pane if necessary. If Settings already shows the permission on, save your work and fully quit and reopen the terminal app before running `parakit doctor` again. This also reloads an app updated on disk while its older process stayed open.
 
-If the entry is stuck or you specifically want macOS to ask again, Apple documents [`tccutil reset <service> [bundle-id]`](https://developer.apple.com/documentation/xcode/resetting-access-to-protected-resources-in-macos). Reset only the failed permission. For Terminal.app:
+If access is still denied, reset the saved decision for the affected service as your desktop user. These examples target Terminal.app. Substitute your launching app's bundle identifier for other terminals. See [Apple's reset command](https://developer.apple.com/documentation/xcode/resetting-access-to-protected-resources-in-macos).
 
 ```bash
 tccutil reset Accessibility com.apple.Terminal
 tccutil reset Microphone com.apple.Terminal
 ```
 
-These commands remove Terminal.app's saved decision; they do not grant access. Run parakit again to trigger the applicable prompt, then grant the permission and restart the terminal application. Do not use `sudo`, which broadens the reset beyond the current user. For iTerm2, Ghostty, or another launcher, substitute that application's bundle identifier.
+Run Parakit again to trigger the prompt, grant permission, and restart the terminal app.
 
 ### `doctor --deep`
 
-For the `standard`/`terminal` paste modes, `parakit doctor --deep` runs two stages and reports which one failed:
+Run `parakit doctor --deep` from an active GUI login with Accessibility already granted. In `standard` and `terminal` modes it runs two checks.
 
-1. A suppressed Cmd+V event-tap smoke test: parakit posts a synthetic paste chord and confirms, via a CoreGraphics event tap that suppresses the chord before it reaches any app, that the chord was actually posted.
-2. A real end-to-end paste-transaction smoke test: parakit briefly opens a small titled window with a text view, pastes a unique sentinel through the production clipboard-swap/paste/`AXValue` path, then reads the text back and verifies clipboard restoration under the [shared policy](running.md#clipboard-staging-and-restore). Accessibility acknowledgement is required when the probe exposes a focused AX element; otherwise an unverified outcome is accepted only if the sentinel still lands.
+1. A CoreGraphics event tap observes and suppresses a synthetic Cmd+V chord.
+2. A temporary window receives a unique paste, reads the text back, and verifies the complete restored clipboard payload. The check requires Accessibility acknowledgement when the probe exposes a focused element. On failure, cleanup preserves newer copies, including HTML with the same plain text.
 
-For `direct` mode, only a suppressed key-event tap runs, and it passes once a synthetic key-down is observed (direct typing posts unicode key-down events without a matching key-up, and never touches the clipboard or `AXValue` acknowledgement, so there is no transaction to open a window and test).
-
-The check reads back the complete restored clipboard payload and fails on read errors; an empty file list does not hide another format. On failure, cleanup retries only while its plain-text sentinel is current, preserving newer copies, including HTML with the same text.
-
-Because stage 2 opens a real window and drives real Accessibility APIs, `doctor --deep` on macOS requires an active GUI login session (not a headless or SSH-only session) with Accessibility already granted to the terminal. The window closes itself automatically once the check completes.
+In `direct` mode the suppressed tap only checks for a Unicode key-down, with no probe window.
 
 ## Hotkey
 
-The macOS push-to-talk hotkey is `Left Control+Space` and is not configurable. With a Qwen3-ASR model, `Left Control+Left Option+Space` requests [prior-dictation context](models/qwen3-asr.md#prior-dictation-context). Press and hold the shortcut while speaking, then release Control or Space when done. parakit handles these chords with a CoreGraphics event tap and suppresses their Space events. Other modified chords, including `Left Control+Shift+Space` and `Command+Space`, pass through to macOS and the focused app, preserving `Command+Space` for Spotlight. The context shortcut also passes through with non-Qwen models and when `qwen.context_on_default_hotkey = true`.
+Hold `Left Control+Space` while speaking, then release Control or Space to transcribe. The event tap suppresses Space for active dictation shortcuts and passes through other chords such as `Command+Space` for Spotlight. See [Qwen context shortcuts](models/qwen3-asr.md#prior-dictation-context).
 
-macOS may also use `Control+Space` for input-source switching when multiple input sources are configured. If parakit does not react, or if the input-source switcher appears instead:
+If the shortcut opens the input-source switcher or Parakit does not respond, check for a conflict.
 
 1. Open System Settings > Keyboard > Keyboard Shortcuts.
 2. Check Input Sources for shortcuts assigned to `Control+Space` or `Control+Option+Space`, and disable or change them.
 3. Check other shortcut categories for warning icons; macOS marks conflicting shortcuts there.
 4. Restart parakit and rerun `parakit doctor`.
 
-## Background Use
-
-Use the commands in [running.md#background-use](running.md#background-use), launched from the terminal application that holds parakit's privacy permissions.
-
 ## Insertion
 
-Parakit matches the frontmost application's focused Accessibility element rather than its on-screen window ID. Same-app field or window changes block insertion without treating palettes, popovers, sheets, or z-order changes as a different target. If an application exposes no focused Accessibility element, matching process and bundle identity provide the fallback; a real application or focused-element mismatch still blocks insertion. Rejected non-direct insertions follow the shared [clipboard staging policy](running.md#clipboard-staging-and-restore). [Paste modes](running.md#insertion) select `Cmd+V` or direct typing through the Accessibility-controlled input path.
+Parakit matches the frontmost application's focused Accessibility element. A field change within the same app blocks insertion, while palettes, popovers, sheets, and window ordering matter only when they change the focused element. When the app exposes no focused element, Parakit checks process and bundle identity. See [paste modes](running.md#insertion) and the [clipboard staging policy](running.md#clipboard-staging-and-restore).
 
-After posting a paste chord, Parakit polls the focused Accessibility element's `AXValue` every 40 ms for evidence that the target consumed the paste, with a target deadline of 1.8 s. Each Accessibility request has a 250 ms messaging timeout. The deadline is checked between reads, so a slow read can extend the overall wait. When no focused element or usable baseline is available after the fallback read, Parakit uses a 1500 ms grace period instead. Direct typing and insertions rejected before posting a paste chord skip acknowledgement. See [insertion outcomes](logging.md#insertion-outcomes) for acknowledgement states and clipboard decisions.
+After sending the paste chord, Parakit polls the focused element's `AXValue` every 40 ms for up to 1.8 seconds, with a 250 ms timeout per Accessibility request. A read in progress can extend that wait. When there is no focused element or usable baseline, it waits 1.5 seconds before applying the clipboard policy. See [insertion outcomes](logging.md#insertion-outcomes).
 
-Paste-failure and paste-fallback notifications surface as real Notification Center banners sent through `osascript`/`display notification`. If macOS does not show them, check System Settings > Notifications; some versions file these banners under "Script Editor" rather than under "parakit". The user-visible messages and recovery steps are in [troubleshooting.md#macos-paste-could-not-be-confirmed](troubleshooting.md#macos-paste-could-not-be-confirmed).
+Paste failure and fallback messages appear as Notification Center banners. If they are missing, look in System Settings > Notifications under Parakit or Script Editor. See [paste recovery](troubleshooting.md#macos-paste-could-not-be-confirmed).
 
 ### What Counts As Evidence
 
-Parakit tries to read a baseline before posting the chord. If that read is unavailable, it attempts a post-chord baseline, which may already include a fast paste. Bare value growth is insufficient: application output, autocomplete, or another input source can change `AXValue` without the transcript arriving. Confirmation requires newly visible transcript-specific evidence.
+Confirmation compares the accessible text before and after paste. If the initial read fails, Parakit tries a baseline after sending the chord, which can miss a fast paste. Matching ignores whitespace so terminal line wraps do not change the comparison.
 
-Matching ignores whitespace on both sides rather than comparing verbatim. A terminal's `AXValue` is its rendered screen, hard-wrapped at the column width and wrapping mid-word, so a pasted transcript comes back with newlines injected at the wrap points. Dropping whitespace makes the comparison independent of that layout.
-
-Transcripts under 12 normalized characters require an exact baseline-to-current insertion delta. Longer transcripts can also use selection geometry to confirm a reformatted value. In `standard` mode, an increased occurrence count for the whole transcript or a 32-character leading/trailing window can confirm when the value grew. `terminal` mode disables occurrence-count evidence because old text can scroll into its sliding rendered value; exact normalized deltas still confirm hard-wrapped text.
+Transcripts under 12 normalized characters require an exact insertion delta. For longer transcripts, selection geometry can confirm reformatted text when the focused element matches. In `standard` mode, growth plus a new occurrence of the transcript or a 32-character edge can also confirm insertion. Terminal scrollback can reveal older occurrences, so `terminal` mode excludes that evidence.
 
 ## Metal Verification
 
-See the [Metal build](build.md#crispasr-and-backends) and [loader-path checks](build.md#runtime-library-paths). To inspect the embedded shader section and device visibility:
+Inspect the embedded shader section and device visibility after a [Metal build](build.md#crispasr-and-backends).
 
 ```bash
 parakit doctor --verbose
 otool -s __DATA __ggml_metallib "$(command -v parakit)" | head
 ```
 
-Build success and device visibility alone do not establish inference acceptance. Use the [model-validation checklist](dev/model-validation.md#macos-cpu-and-metal) and [quality procedures](dev/quality.md#qwen-and-moondream-comparisons) to check CPU/Metal inference and physical desktop behavior.
+For runtime verification, see [loader paths](build.md#runtime-library-paths) and [macOS CPU and Metal validation](dev/model-validation.md#macos-cpu-and-metal).

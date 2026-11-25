@@ -1,18 +1,18 @@
 # Qwen3-ASR
 
-Parakit's experimental Qwen3-ASR presets support the 0.6B and 1.7B models, language hints, and context from recent dictations. The [Qwen models](https://huggingface.co/Qwen/Qwen3-ASR-0.6B) use the Apache 2.0 license.
+Parakit's experimental Qwen3-ASR presets support language hints and context from recent dictations. The 0.6B and 1.7B models use the Apache 2.0 license. [Qwen3-ASR model card](https://huggingface.co/Qwen/Qwen3-ASR-0.6B)
 
 ## Start
 
-After following the [installation instructions](../../README.md#install), select a Qwen model:
+Select a Qwen preset after [installing parakit](../../README.md#install).
 
 ```bash
 parakit start --model-preset qwen3-asr-1.7b --no-cleaning
 ```
 
-Use `qwen3-asr-0.6b` for the smaller model. For advance downloading, run `parakit fetch --model-preset qwen3-asr-1.7b`. Both presets use the shared [model cache and precision options](../running.md#model-presets).
+Use `qwen3-asr-0.6b` for the smaller model. For advance downloads or another precision, see [model presets](../running.md#model-presets).
 
-To keep the selection, edit the file printed by `parakit config path`:
+To keep the selection, add these settings to your [config file](../configuration.md#validation-and-recovery).
 
 ```toml
 [daemon]
@@ -22,48 +22,46 @@ model_preset = "qwen3-asr-1.7b"
 enabled = false
 ```
 
-Apply model and configuration changes through the [restart workflow](../configuration.md#validation-and-recovery). Disabling [cleaning](../cleaning-rules.md#profiles) preserves raw model wording and avoids English cleanup on multilingual speech.
+These examples disable English transcript cleanup for multilingual speech. To keep cleaning enabled, see [Qwen's phrase repairs](../cleaning-rules.md#function-word-punctuation).
 
-`--qwen-language en` (or `English`) forces English instead of automatic language identification. `--qwen-max-new-tokens N` overrides the per-chunk generation budget. Accepted languages, bounds, defaults, and CLI precedence are listed under `[qwen]` in the [configuration reference](../config_reference.toml). Explicit Qwen flags require a Qwen model; persistent `[qwen]` settings are inactive for Parakeet after validation.
+`--qwen-language en` (or `English`) selects English as the source language. The default, `auto`, detects the language from audio. `--qwen-max-new-tokens N` sets the per-chunk generation budget. Both apply to Qwen presets and local GGUF files loaded by the Qwen backend. See `[qwen]` in the [configuration reference](../config_reference.toml) for other languages, bounds, and defaults.
 
 ## Prior Dictation Context
 
-The separate shortcut lets you decide for each dictation whether earlier speech is relevant. Request context when continuing a topic or reusing names and terms from recent dictations. Use the original shortcut for unrelated speech: by default, it ignores prior dictations, just like the other models.
-
-Hold the shortcut while speaking:
+Use the context shortcut when continuing a topic or reusing names and terms from recent dictations.
 
 | Intent | Linux and Windows | macOS |
 | --- | --- | --- |
 | Ordinary dictation, ignoring prior context | `Ctrl+Space` | `Left Control+Space` |
 | Request prior-dictation context | `Ctrl+Left Alt+Space` | `Left Control+Left Option+Space` |
 
-These are the defaults. Set `context_on_default_hotkey = true` to request context with the original shortcut instead; the extra shortcut then adds nothing, so Parakit leaves it unregistered and does not intercept it.
+Set `qwen.context_on_default_hotkey = true` to request context with the original shortcut and leave the extra shortcut unregistered.
 
 Context intent is fixed when Space is pressed, so releasing Alt or Option while speaking does not change it or stop recording. Releasing Control or Space stops recording.
 
-Use the left Alt key on Linux and Windows. On Windows, `Ctrl+Right Alt+Space` is consumed without starting recording, because Windows reports AltGr as Left Control plus Right Alt; registering the context shortcut also consumes `AltGr+Space` on AltGr layouts. To preserve `AltGr+Space`, set `context_on_default_hotkey = true` to keep context on the original shortcut, or set `context_dictations = 0` to disable context; restart either way, and ordinary dictation remains available.
+On AltGr layouts, Windows reports Right Alt as Left Control plus Right Alt. Registering the context shortcut consumes `Ctrl+Right Alt+Space` and `AltGr+Space` without starting recording. To preserve `AltGr+Space`, set `context_on_default_hotkey = true` or disable context with `qwen.context_dictations = 0`, then restart.
 
-The worker selects prior dictations across all apps using the configured count and age limits, orders them oldest first, and keeps the newest 1,500 Unicode characters, including newline separators. Age includes time spent suspended. It uses stored cleaned text, or raw text when cleaning is disabled.
+Context comes from [daemon history](../running.md#daemon-control) across all apps, within the configured count and age limits. Parakit orders the selected dictations oldest first and keeps the newest 1,500 Unicode characters, including newline separators. Age includes time spent suspended. This uses the stored cleaned transcript, or raw text when cleaning is disabled. Setting `qwen.context_dictations` or `daemon.transcript_history` to zero disables context and its extra shortcut.
 
-Context draws only from [daemon history](../running.md#daemon-control); it neither increases retention nor loads prior text from JSONL logs. Setting either `context_dictations` or `daemon.transcript_history` to zero disables context and its extra shortcut.
+Captures shorter than one second and captures with empty, expired, disabled, or unusable context use ordinary transcription. Short captures keep their silence padding.
 
-Empty, expired, disabled, or unusable context falls back to ordinary dictation, which is never rerun. Captures shorter than one second also use ordinary transcription, retaining the existing silence padding.
+Qwen can copy earlier text or exhaust the generation budget when context is long. Parakit retries once without context if inference fails, returns empty output, or repeats at least five consecutive words from context. For results shorter than five words, all output words must match a phrase in the context. The check compares lowercase Unicode alphanumeric words and ignores punctuation. Repeated speech can also trigger it, and earlier mistranscriptions can still bias the output. If clearing the session context fails, parakit reports the error. If the retry stays empty, it reports no speech detected.
 
-Qwen can copy earlier text instead of recognizing the audio, including on longer recordings, and a long context can push generation past its token budget. After contextual inference, Parakit reruns the capture once without context if inference fails, the output is empty, or the output is wholly contained in the prior text or shares at least five consecutive words with it. Matching compares lowercase Unicode alphanumeric words, ignoring punctuation. This can also rerun genuinely repeated phrases, and it does not catch every substitution caused by context; earlier mistranscriptions and unrelated context can still bias recognition. If clearing the context fails, the session state is uncertain and Parakit reports the error without a rerun. The rerun result is used as is, so a capture that stays empty is reported as no speech detected.
-
-With the 1.7B model, related context helps and unrelated context hurts. Context from the same conversation keeps the error rate flat while fixing names and jargon that ordinary dictation gets wrong, such as "cloud code" to "Claude Code" and "Flash Extension" to "Flash Attention". Context from an unrelated recording raised the error rate from 7.6% to 8.6%, with 52 captures worse and 29 better. Unrelated words rarely leak into the output, but in about 1% of captures the model skipped the start of the audio and transcribed only the end, which the rerun check does not catch. Generic encyclopedia text had no clear effect. About 1,000 characters of context makes inference roughly 40 to 55% slower, before any rerun. Leave `context_on_default_hotkey` off unless consecutive dictations usually share a topic.
+In an evaluation of the 1.7B model, same-conversation context left the word error rate against a model consensus roughly unchanged and improved some names and jargon, such as "cloud code" to "Claude Code" and "Flash Extension" to "Flash Attention". Context from an unrelated recording raised the measured error rate from 7.6% to 8.6%, with 52 captures worse and 29 better. In about 1% of those captures, the model skipped the start of the audio and transcribed only the end, which the retry check can miss. Generic encyclopedia text had no clear effect. About 1,000 characters of context added roughly 40 to 55% to inference time before any retry.
 
 > [!NOTE]
-> These results come from about 100 minutes of one user's English voice notes: 228 captures of 15 to 40 seconds, mostly from one two-speaker technical conversation. Context was the model's own earlier transcripts. Outputs were scored against the word-level consensus of four models that never saw context (three Parakeet variants and Qwen3-ASR 0.6B), not a human transcript. That reference shares some of the jargon errors that related context fixes, so it understates the benefit.
+> The evaluation used 228 English voice notes of 15 to 40 seconds from one user, about 100 minutes of audio, mostly from one two-speaker technical conversation. Context came from the model's own earlier transcripts. The reference was a word-level consensus from three Parakeet variants and Qwen3-ASR 0.6B running without context. The scores measure agreement with those models.
 
-Use `--verbose` or the [inference log fields](../logging.md#transcription-record-fields) to inspect the shortcut mode, context length, and whether a retry occurred.
+Inspect which context was used through [inference diagnostics](../logging.md#transcription-record-fields).
 
-The extra shortcut is inactive for other models. If its registered chord is already owned, Parakit warns and keeps the original shortcut usable. Linux IBus upgrades need the matching `parakit-ibus` helper and an [engine reload](../linux-desktop.md#ibus-setup).
+If another application owns the optional shortcut, parakit warns and keeps the original shortcut usable. Follow the [context troubleshooting steps](../troubleshooting.md#qwen-context-has-no-effect) if the shortcut has no effect.
 
 ## Long Audio And Inference
 
-By default, Qwen splits long audio into native chunks of at most 30 seconds, choosing quiet split points and resetting the decoder for each chunk. Every chunk receives the same prior-dictation context; a preceding chunk's new text is not passed to the next. The model's published 1,200-second input capability does not extend [Parakit's recording limit](../running.md#microphone).
+By default, Qwen splits long audio at quiet points into chunks of at most 30 seconds. The decoder resets per chunk, and every chunk receives the same prior-dictation context. See [parakit's recording limit](../running.md#microphone) for the maximum combined duration.
 
-An incomplete decode fails the dictation instead of inserting partial text. Language hints and token budgets are restored after the [readiness and idle-reload flow](../running.md#idle-model-offload). Audio-attention defaults and overrides are in [native inference controls](../configuration.md#native-inference-controls); use the [Qwen validation procedure](../dev/quality.md#qwen-and-moondream-comparisons) for reference comparisons.
+If any chunk exhausts `--qwen-max-new-tokens` before reaching the end-of-sequence token, parakit discards the attempt's entire transcription, including completed chunks. A contextual attempt may retry without context. See [context retry rules](#prior-dictation-context), [readiness and idle reload](../running.md#idle-model-offload), and [native inference controls](../configuration.md#native-inference-controls).
 
-For inactive history or shortcut conflicts, follow [context troubleshooting](../troubleshooting.md#qwen-context-has-no-effect). If recognition changes unexpectedly, compare ordinary dictation and the selected [cleaning profile](../cleaning-rules.md#profiles).
+For reference comparisons, use the [Qwen validation procedure](../dev/quality.md#qwen-and-moondream-comparisons).
+
+If phrasing changes unexpectedly, compare with ordinary dictation using the same [cleaning profile](../cleaning-rules.md#profiles).
