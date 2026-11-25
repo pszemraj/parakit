@@ -97,7 +97,7 @@ Keep the full bundle together when copying it to another machine. Stop a running
 
 Substitute the copied bundle's path. The destination only needs its [runtime dependencies](#backend-requirements). Add `-NoUserPath` to skip the User `PATH` update.
 
-Install as your desktop user in a per-user directory. The installer refuses system paths and non-empty custom destinations without a `.parakit-install` marker. Reinstalling replaces the entire app directory so old accelerator DLLs are removed.
+Install as your desktop user in a per-user directory. Installing needs no administrator rights or Developer Mode and leaves the system `PATH` unchanged. The installer refuses system paths and non-empty custom destinations without a `.parakit-install` marker. Reinstalling replaces the entire app directory so old accelerator DLLs are removed.
 
 ## Runtime Manifest
 

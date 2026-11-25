@@ -184,7 +184,7 @@ Use isolated configuration for the tested preset, precision, device, and Qwen op
 
 1. Dictate a sentence with a negation, number, and the word language. Confirm one insertion, inspect the transcript, and repeat with normal cleaning enabled.
 2. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist.
-3. Record quiet speech, breathless speech, and nonspeech with real fan, keyboard, breathing, or microphone handling sounds. Record the environment and listen to disagreements.
+3. Record quiet speech, breathless speech, and nonspeech with real fan, keyboard, breathing, or microphone handling sounds. Record the environment and listen to disagreements. Do not add or assume a new VAD or rejection rule from these checks.
 
 Check status, history, logs, and inserted text after each run. Mark each item pass, fail, or pending with evidence. Listen to the actual recordings to adjudicate recognition; follow the [reference comparison procedure](quality.md#recommended-ab-procedure) when outputs disagree. VRAM-pressure tests and physical stop-to-insert p50/p95 measurements are separate runs.
 

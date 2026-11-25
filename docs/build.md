@@ -35,7 +35,7 @@ cargo install --locked --path .
 
 Add the same accelerator feature flag for a local GPU build. Cargo installs the release build to its bin directory, usually `~/.cargo/bin`. Default Linux builds install both `parakit` and `parakit-ibus` and require the IBus development package even when you use X11. See [IBus setup and upgrades](linux-desktop.md#ibus-setup).
 
-For an X11-only build, select the daemon and bundled runtime features explicitly. You can also enable CUDA or Vulkan.
+For an X11-only build, select the daemon and bundled runtime features explicitly. You can also enable CUDA or Vulkan. This build has no IBus support, so it cannot do native GNOME Wayland dictation.
 
 ```bash
 cargo install --locked --path . --no-default-features --features bundled,daemon

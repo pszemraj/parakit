@@ -119,7 +119,7 @@ The focused application receives the literal Space key when you dictate with thi
 
 The experimental evdev proxy grabs a physical keyboard event device, suppresses the dictation chords' Space events, and forwards other key events through `/dev/uinput`.
 
-The proxy needs a readable keyboard event device with both `Ctrl` and `Space` and writable `/dev/uinput`. Doctor can report unreadable non-keyboard devices while a usable keyboard still lets startup proceed.
+The proxy needs a readable keyboard event device with both `Ctrl` and `Space` and writable `/dev/uinput`. Only this backend needs them; the default backends do not read `/dev/input` or require `/dev/uinput`. Doctor can report unreadable non-keyboard devices while a usable keyboard still lets startup proceed.
 
 ```bash
 sudo usermod -aG input "$USER"
