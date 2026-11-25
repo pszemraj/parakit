@@ -75,7 +75,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 53;
+pub const CLEANER_VERSION: u32 = 54;
 
 /// Function-word punctuation passes enabled by default for Qwen dictation.
 pub const PHRASE_BREAK_RULES: &[&str] = &["merge-sentence-breaks", "function-word-commas"];

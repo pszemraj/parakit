@@ -38,20 +38,17 @@ fn sentence_merges_and_fillers_share_capitalization_exceptions() {
             ("Try it and. I will help.", "Try it and I will help."),
             ("Try it but. I'll check.", "Try it but I'll check."),
             ("Use our. API.", "Use our API."),
-            ("Use our. Mac.", "Use our Mac."),
-            ("Use our. Linux setup.", "Use our Linux setup."),
-            ("Ask our. Peter.", "Ask our Peter."),
-            ("Use our. Peter's setup.", "Use our Peter's setup."),
-            ("Use our. Mac-based setup.", "Use our Mac-based setup."),
+            ("Use our. October setup.", "Use our October setup."),
+            ("Use our. Friday's notes.", "Use our Friday's notes."),
+            ("Use the. West entrance.", "Use the west entrance."),
             ("Use our. macOS setup.", "Use our macOS setup."),
             ("Use our. v1.2 config.", "Use our v1.2 config."),
             (
                 "Use our. example.com config.",
                 "Use our example.com config.",
             ),
-            ("Ask um. Peter.", "Ask Peter."),
+            ("Try um. Wednesday.", "Try Wednesday."),
             ("Use um. API.", "Use API."),
-            ("Use um. Mac.", "Use Mac."),
             ("Try um. I'll check.", "Try. I'll check."),
         ],
     );
@@ -114,6 +111,29 @@ fn punctuation_preserves_clause_restarts_and_completed_questions() {
                 "The build failed. It's recoverable.",
             ),
             ("What is the um?", "What is the?"),
+            (
+                "The build finished um. The tests are running now.",
+                "The build finished. The tests are running now.",
+            ),
+            (
+                "I finished the report, um. Let's go to dinner.",
+                "I finished the report. Let's go to dinner.",
+            ),
+            ("Is it ready um? Yes it is.", "Is it ready? Yes it is."),
+            (
+                "Ship it um! Now run the tests.",
+                "Ship it! Now run the tests.",
+            ),
+            (
+                "We have the tooling um. Set a goal.",
+                "We have the tooling. Set a goal.",
+            ),
+            ("Go to um. The main config.", "Go to the main config."),
+            (
+                "It depends on what um? We choose.",
+                "It depends on what we choose.",
+            ),
+            ("I um. Need a ride.", "I need a ride."),
         ],
     );
 }
@@ -124,6 +144,10 @@ fn commas_preserve_conjunction_asides_and_stranded_prepositions() {
         CleaningProfile::Safe,
         &[
             ("Use our, setup.", "Use our setup."),
+            (
+                "He took my, frankly, terrible advice.",
+                "He took my, frankly, terrible advice.",
+            ),
             (
                 "Use their, settings and his, defaults.",
                 "Use their settings and his defaults.",
@@ -159,6 +183,27 @@ fn contextual_merges_require_a_nominal_continuation() {
             ("The list of, a few choices.", "The list of a few choices."),
             ("Use the, larger window.", "Use the larger window."),
             ("Use my. Backup file.", "Use my backup file."),
+            (
+                "I need the. Actually forget it.",
+                "I need the. Actually forget it.",
+            ),
+            (
+                "I went to the. Well, never mind.",
+                "I went to the. Well, never mind.",
+            ),
+            (
+                "I need the. Let’s start over.",
+                "I need the. Let’s start over.",
+            ),
+            (
+                "That jacket is his. Make sure it gets returned.",
+                "That jacket is his. Make sure it gets returned.",
+            ),
+            (
+                "Is that jacket his? Tell me.",
+                "Is that jacket his? Tell me.",
+            ),
+            ("Did you say its? Tell me.", "Did you say its? Tell me."),
             (
                 "I forgot the. After lunch I remembered.",
                 "I forgot the. After lunch I remembered.",
@@ -241,6 +286,30 @@ fn phrase_repairs_distinguish_complements_from_ambiguous_boundaries() {
             ),
             ("I'm standing by. Call me.", "I'm standing by. Call me."),
             (
+                "That's where the error is coming from. The fix is simple.",
+                "That's where the error is coming from. The fix is simple.",
+            ),
+            (
+                "I know who you're talking to. My manager told me.",
+                "I know who you're talking to. My manager told me.",
+            ),
+            (
+                "Check what I set it to. The other question can wait.",
+                "Check what I set it to. The other question can wait.",
+            ),
+            (
+                "That’s the team I spoke with. Our manager agreed.",
+                "That’s the team I spoke with. Our manager agreed.",
+            ),
+            (
+                "It is the one I came with. The rest stayed home.",
+                "It is the one I came with. The rest stayed home.",
+            ),
+            (
+                "Who called? Return to. The previous task.",
+                "Who called? Return to the previous task.",
+            ),
+            (
                 "Which one do you agree with? I forgot.",
                 "Which one do you agree with? I forgot.",
             ),
@@ -316,5 +385,9 @@ fn filler_chain_context_does_not_depend_on_phrase_repairs() {
     assert_eq!(
         cleaner.clean_text("The task ended um. Uh. We can leave."),
         "The task ended. We can leave."
+    );
+    assert_eq!(
+        cleaner.clean_text("Is it ready um? Uh. Yes it is."),
+        "Is it ready? Yes it is."
     );
 }

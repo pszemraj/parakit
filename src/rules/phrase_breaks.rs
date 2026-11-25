@@ -3,10 +3,6 @@
 use super::engine::TransformResult;
 use super::passes::{apply_replacements, protected_token_case};
 
-const SENTENCE_WORDS: &[&str] = &[
-    "an", "your", "our", "their", "its", "his", "and", "or", "but",
-];
-
 /// Merge a period or question mark after an eligible function word.
 ///
 /// # Returns
@@ -31,11 +27,17 @@ pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
         let mark = captures.name("mark").unwrap();
         let end = captures.get(0).unwrap().end();
         let tail = &input[end..];
-        let direct = SENTENCE_WORDS.contains(&word.as_str().to_ascii_lowercase().as_str())
-            && (coordinator(word.as_str()) || nominal_start(tail));
-        if !(direct || (mark.as_str() == "." && continues_phrase(word.as_str(), tail)))
-            || coordinator_restart(word.as_str(), first_word(tail))
-        {
+        let previous = word.as_str().to_ascii_lowercase();
+        let merge = if coordinator(&previous) {
+            !coordinator_restart(&previous, first_word(tail))
+        } else if mark.as_str() == "?" {
+            matches!(previous.as_str(), "an" | "your" | "our" | "their") && nominal_start(tail)
+        } else {
+            previous != "his"
+                && continues_phrase(&previous, tail)
+                && !(preposition(&previous) && may_be_stranded(&input[..word.start()]))
+        };
+        if !merge {
             continue;
         }
         let Some((word_end, next)) = continuation(input, end) else {
@@ -72,11 +74,15 @@ pub(super) fn remove_function_word_commas(input: &str) -> TransformResult<'_> {
             let mark = captures.name("mark").unwrap();
             let tail = &input[captures.get(0).unwrap().end()..];
             (continues_phrase(word.as_str(), tail)
+                && !tail
+                    .split_whitespace()
+                    .next()
+                    .is_some_and(|w| w.ends_with(','))
                 && !attached_word(input, word.start())
                 && word.as_str().len() != 1)
                 .then(|| (mark.start(), mark.end(), String::new()))
         })
-        .collect();
+        .collect::<Vec<_>>();
     apply_replacements(input, edits)
 }
 
@@ -97,34 +103,42 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
     );
     let mut matches = re.captures_iter(input).peekable();
     let mut edits = Vec::new();
+    let mut pending_terminal: Option<&str> = None;
     while let Some(captures) = matches.next() {
         let whole = captures.get(0).unwrap();
         let mut end = whole.end();
         let mut replacement = format!("{} ", captures.get(1).map_or("", |m| m.as_str()));
-        if let Some(terminal) = captures.name("terminal") {
+        let terminal = captures.name("terminal").map(|m| m.as_str());
+        // A chain such as "um? Uh." carries its question to the next real word.
+        let pending = pending_terminal.take();
+        if let Some(terminal) = pending
+            .filter(|s| s.contains(['?', '!']))
+            .or(terminal)
+            .or(pending)
+        {
             let tail = &input[end..];
             let gap = tail.len() - tail.trim_start_matches([' ', '\t']).len();
             let next_start = end + gap;
             if matches
                 .peek()
-                .is_none_or(|next| next.get(0).unwrap().start() > next_start)
+                .is_some_and(|next| next.get(0).unwrap().start() <= next_start)
             {
+                pending_terminal = Some(terminal);
+            } else {
                 let previous = input[..whole.start()]
                     .split_whitespace()
                     .rev()
                     .map(first_word)
                     .find(|word| !word.is_empty() && !re.is_match(word))
                     .unwrap_or("");
-                let tail = &input[next_start..];
-                let restart = (starts_clause(tail) && !clause_link(previous))
-                    || coordinator_restart(previous, first_word(tail));
-                if let Some((word_end, next)) = continuation(input, next_start).filter(|_| !restart)
+                if let Some((word_end, next)) = continuation(input, next_start)
+                    .filter(|_| !filler_ends_sentence(previous, terminal, &input[next_start..]))
                 {
                     replacement.push_str(&input[end..next_start]);
                     replacement.push_str(&next);
                     end = word_end;
                 } else {
-                    replacement = format!("{} ", terminal.as_str());
+                    replacement = format!("{terminal} ");
                 }
             }
         }
@@ -145,6 +159,29 @@ fn coordinator(word: &str) -> bool {
 
 fn coordinator_restart(previous: &str, next: &str) -> bool {
     coordinator(previous) && coordinator(next) && !previous.eq_ignore_ascii_case(next)
+}
+
+fn filler_ends_sentence(previous: &str, terminal: &str, tail: &str) -> bool {
+    let next = first_word(tail);
+    if coordinator_restart(previous, next) {
+        return true;
+    }
+    if clause_link(previous) {
+        return false;
+    }
+    if starts_clause(tail) {
+        return true;
+    }
+    if determiner(previous) || preposition(previous) {
+        return false;
+    }
+    // A word followed by a determiner can begin an imperative ("Set a goal")
+    // or continue the preceding subject ("I um. Need a ride").
+    let second = first_word(tail.split_whitespace().nth(1).unwrap_or(""));
+    terminal.contains(['?', '!'])
+        || determiner(next)
+        || next.eq_ignore_ascii_case("let")
+        || (determiner(second) && !starts_clause(previous))
 }
 
 fn clause_link(word: &str) -> bool {
@@ -256,7 +293,16 @@ fn nominal_start(text: &str) -> bool {
         && !preposition(word)
         && !matches!(
             word.to_ascii_lowercase().as_str(),
-            "in" | "on"
+            "actually"
+                | "well"
+                | "no"
+                | "ok"
+                | "okay"
+                | "anyway"
+                | "never"
+                | "let"
+                | "in"
+                | "on"
                 | "at"
                 | "as"
                 | "after"
@@ -286,6 +332,16 @@ fn continues_phrase(previous: &str, text: &str) -> bool {
         .is_some_and(|(_, tail)| nominal_start(tail.trim_start_matches([' ', '\t'])))
 }
 
+/// A wh-clause or relative construction can leave its preposition sentence-final.
+fn may_be_stranded(prefix: &str) -> bool {
+    let sentence = prefix.rsplit(['.', '?', '!', '\n']).next().unwrap_or("");
+    regex_static!(
+        r"(?i)\b(?:who|whom|whose|what|which|when|where|why|how|whether|that['’]s|the[ \t]+one)\b",
+        "stranded preposition context"
+    )
+    .is_match(sentence)
+}
+
 fn attached_word(input: &str, start: usize) -> bool {
     input[..start].chars().next_back().is_some_and(|c| {
         c.is_alphanumeric() || matches!(c, '_' | '-' | '\'' | '’' | '.' | '/' | '@')
@@ -302,7 +358,7 @@ fn continuation(input: &str, start: usize) -> Option<(usize, String)> {
         || word.starts_with("I'")
         || word.starts_with("I’")
         || protected_token_case(word)
-        || PROPER_NAMES.contains(&word.split(['\'', '’', '-']).next().unwrap());
+        || CALENDAR_NAMES.contains(&word.split(['\'', '’', '-']).next().unwrap());
     let mut next = word.to_owned();
     if !preserve {
         let first = word.chars().next().unwrap();
@@ -311,260 +367,24 @@ fn continuation(input: &str, start: usize) -> Option<(usize, String)> {
     Some((start + word.len(), next))
 }
 
-// Names repeatedly capitalized inside historical dictation sentences.
-const PROPER_NAMES: &[&str] = &[
-    "Abilene",
-    "Adam",
-    "Adex",
-    "Africa",
-    "Airbnb",
-    "Alan",
-    "Alibaba",
-    "Allen",
-    "Altman",
-    "Amazon",
-    "America",
-    "American",
-    "Andrew",
-    "Apache",
-    "Apple",
-    "April",
-    "Asian",
-    "Astra",
-    "Atlanta",
-    "August",
-    "Austin",
-    "Auth",
-    "Battersea",
-    "Bellman",
-    "Ben",
-    "Bible",
-    "Bitwarden",
-    "Bluetooth",
-    "Bo",
-    "Bob",
-    "Bobble",
-    "Borat",
-    "Boston",
-    "Brave",
-    "Brazilian",
-    "British",
-    "Brock",
-    "Buckmaster",
-    "Bureau",
-    "Bushism",
-    "California",
-    "Calvin",
-    "Catholic",
-    "Cemetery",
-    "Chicago",
-    "Chico",
-    "China",
-    "Chinese",
-    "Chomp",
-    "Chris",
-    "Christ",
-    "Chrome",
-    "Claude",
-    "Clot",
-    "Cloudflare",
-    "Coke",
-    "Colab",
-    "Colossus",
-    "Coxon",
-    "Ctrl",
-    "Daddy",
-    "Dario",
-    "Databricks",
-    "David",
-    "Deberta",
-    "December",
-    "Dell",
-    "Discord",
-    "Disney",
-    "Docker",
-    "Doritos",
-    "Dropbox",
-    "Dyson",
-    "Eastern",
-    "Eats",
-    "Einstein",
-    "Elon",
-    "Emmy",
-    "English",
-    "Equinox",
-    "Ethernet",
-    "Eton",
-    "Europe",
-    "European",
-    "Excel",
-    "Falcon",
-    "Fappy",
-    "February",
-    "Fi",
-    "Ford",
-    "Francisco",
-    "Franken",
-    "Frankenstein",
-    "French",
-    "Friday",
-    "Fuyu",
-    "Gathering",
-    "Gemini",
-    "Gemma",
-    "Georgia",
-    "German",
-    "Ghostie",
-    "Gina",
-    "Google",
-    "Greek",
-    "Grock",
-    "Gucci",
-    "Haskell",
-    "Hobbit",
-    "Holly",
-    "Houston",
-    "Hz",
-    "Ian",
-    "Indian",
-    "Italian",
-    "Jackson",
-    "January",
-    "Japan",
-    "Jeek",
-    "Jensen",
-    "Jeppa",
-    "Jesus",
-    "Jinja",
-    "Jira",
-    "July",
-    "June",
-    "Keon",
-    "Kimi",
-    "Kimmy",
-    "Kissinger",
-    "Korea",
-    "Korean",
-    "Kroger",
-    "Laguna",
-    "Latin",
-    "Laura",
-    "Lee",
-    "Legends",
-    "Libra",
-    "Libre",
-    "Lily",
-    "Linux",
-    "Lite",
-    "Loki",
-    "London",
-    "Luke",
-    "Luna",
-    "Luther",
-    "Mac",
-    "Macs",
-    "Madison",
-    "Maine",
-    "Mamba",
-    "Markov",
-    "Matt",
-    "Megalodon",
-    "Metroska",
-    "Microsoft",
-    "Mike",
-    "Mistral",
+const CALENDAR_NAMES: &[&str] = &[
     "Monday",
-    "Moondream",
-    "Mr",
-    "Nala",
-    "Naomi",
-    "Nemo",
-    "Neobert",
-    "Netlify",
-    "Nobel",
-    "North",
-    "November",
-    "October",
-    "Olmo",
-    "Palace",
-    "Parakeit",
-    "Pareto",
-    "Pegasus",
-    "Peng",
-    "Peter",
-    "Philips",
-    "Pilates",
-    "Pokemon",
-    "Python",
-    "Quan",
-    "Quen",
-    "Quentin",
-    "Quinn",
-    "Raven",
-    "Reddit",
-    "Reuters",
-    "Rufus",
-    "Russian",
-    "Rust",
-    "Safari",
-    "Sagitt",
-    "Samaritan",
-    "Samaritans",
-    "San",
-    "Saturday",
-    "Sauron",
-    "Semble",
-    "Seoul",
-    "September",
-    "Shitta",
-    "Siri",
-    "Sonic",
-    "Sora",
-    "Spark",
-    "Spotify",
-    "Steve",
-    "Stokes",
-    "Sudoku",
-    "Sumble",
-    "Sunday",
-    "Swift",
-    "Swiss",
-    "Switzerland",
-    "Tailscale",
-    "Tebow",
-    "Terra",
-    "Texas",
-    "Thanksgiving",
-    "Thompson",
-    "Thomson",
-    "Thursday",
-    "Topo",
-    "Tory",
-    "Treasure",
-    "Triton",
-    "Trump",
     "Tuesday",
-    "Tuesdays",
-    "Twitter",
-    "Uber",
-    "Ubuntu",
-    "Ulmo",
-    "Unicode",
-    "United",
-    "Unix",
-    "Vim",
-    "Vince",
-    "Virginia",
-    "Vulcan",
-    "Vulture",
-    "Wallace",
-    "Wayland",
-    "Waymo",
     "Wednesday",
-    "West",
-    "Wi",
-    "Wikipedia",
-    "York",
-    "Zell",
-    "Zurich",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
