@@ -35,6 +35,11 @@ pub enum RulePosition {
     /// Run after every built-in rule, including whitespace/punctuation
     /// cleanup and sentence capitalization.
     Last,
+    /// Apply generated whole-word corrections together after all other rules.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[value(skip)]
+    WordReplacement,
 }
 
 impl RulePosition {
@@ -44,13 +49,14 @@ impl RulePosition {
     ///
     /// # Returns
     ///
-    /// `first`, `standard`, or `last`.
+    /// `first`, `standard`, `last`, or the internal `word-replacement` label.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::First => "first",
             Self::Standard => "standard",
             Self::Last => "last",
+            Self::WordReplacement => "word-replacement",
         }
     }
 }

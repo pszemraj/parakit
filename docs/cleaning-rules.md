@@ -21,7 +21,7 @@ parakit config show
 parakit rules test "Try QUAN, quandary, rust and RUST"
 ```
 
-With default cleaning settings, the `Clean:` line reads `Try Qwen, quandary, Rust and RUST`. Replacements run after the other cleaning rules, so sentence capitalization can affect an exact case match.
+With default cleaning settings, the `Clean:` line reads `Try Qwen, quandary, Rust and RUST`. Replacements run after the other cleaning rules, so sentence capitalization can affect an exact case match. Each match uses the text from before any replacement, so `quan = "Qwen"` still produces `Qwen` when a separate entry maps `qwen` to `qwen3`.
 
 The test command always runs cleaning. For dictation, keep cleaning enabled and [restart the daemon](configuration.md#validation-and-recovery) to apply the edits.
 

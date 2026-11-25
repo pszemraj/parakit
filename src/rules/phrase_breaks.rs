@@ -67,22 +67,19 @@ pub(super) fn remove_function_word_commas(input: &str) -> TransformResult<'_> {
         r"\b(?P<word>[A-Za-z]+)(?P<mark>,)[ \t]+\b",
         "function-word comma pattern"
     );
-    let edits = re
-        .captures_iter(input)
-        .filter_map(|captures| {
-            let word = captures.name("word").unwrap();
-            let mark = captures.name("mark").unwrap();
-            let tail = &input[captures.get(0).unwrap().end()..];
-            (continues_phrase(word.as_str(), tail)
-                && !tail
-                    .split_whitespace()
-                    .next()
-                    .is_some_and(|w| w.ends_with(','))
-                && !attached_word(input, word.start())
-                && word.as_str().len() != 1)
-                .then(|| (mark.start(), mark.end(), String::new()))
-        })
-        .collect::<Vec<_>>();
+    let edits = re.captures_iter(input).filter_map(|captures| {
+        let word = captures.name("word").unwrap();
+        let mark = captures.name("mark").unwrap();
+        let tail = &input[captures.get(0).unwrap().end()..];
+        (continues_phrase(word.as_str(), tail)
+            && !tail
+                .split_whitespace()
+                .next()
+                .is_some_and(|w| w.ends_with(','))
+            && !attached_word(input, word.start())
+            && word.as_str().len() != 1)
+            .then(|| (mark.start(), mark.end(), ""))
+    });
     apply_replacements(input, edits)
 }
 

@@ -94,7 +94,7 @@ impl ConfigFile {
     /// Combine regex rules with literal word corrections in their application order.
     ///
     /// # Returns
-    /// User rules followed by word corrections, which run after built-in cleaning.
+    /// User rules followed by word corrections, which apply together after all other cleaning.
     ///
     /// # Errors
     /// Returns an error when a replacement key is not one nonempty word.
@@ -120,8 +120,8 @@ impl ConfigFile {
                     target.case_sensitive()
                 )),
                 pattern: format!(r"{flags}\b{}\b", regex::escape(source)),
-                replacement: replacement.replace('$', "$$"),
-                position: RulePosition::Last,
+                replacement: replacement.to_owned(),
+                position: RulePosition::WordReplacement,
             });
         }
         Ok(rules)

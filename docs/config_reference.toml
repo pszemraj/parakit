@@ -180,7 +180,7 @@ backend = "auto"
 # ---------- Word Replacements ----------
 # Table of source words to strings or inline tables. Default: empty. Applies to every model and profile.
 # Source keys are nonempty words (letters, marks, digits or underscores) with distinct lowercase forms.
-# Entries run in sorted key order after all other rules, so later entries can match earlier output.
+# Entries match the same text after all other rules. Overlapping matches use the first sorted key.
 # Disable as replace-word:<lowercase source> through cleaning.disabled_rules.
 # See: [matching and preview](cleaning-rules.md#word-replacements).
 [replacements]

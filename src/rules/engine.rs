@@ -13,7 +13,7 @@ use fancy_regex::{Regex as FancyRegex, RegexBuilder as FancyRegexBuilder};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use super::defaults::DEFAULT_RULES;
 use super::numbers::NumberKind;
@@ -283,6 +283,7 @@ impl CompiledRule {
 #[derive(Debug)]
 pub struct Cleaner {
     rules: Vec<CompiledRule>,
+    word_replacement_start: usize,
     profile: CleaningProfile,
     drop_trailing_period: bool,
     number_threshold: f64,
@@ -418,10 +419,18 @@ impl Cleaner {
             )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
+        let word_replacement_start = rules.len();
+        push_user_rules(
+            &mut rules,
+            user_rules,
+            RulePosition::WordReplacement,
+            disabled,
+        )?;
 
         let ruleset_id = compute_ruleset_id(profile, drop_trailing_period, &rules);
         Ok(Self {
             rules,
+            word_replacement_start,
             profile,
             drop_trailing_period,
             number_threshold,
@@ -450,15 +459,16 @@ impl Cleaner {
     pub fn try_clean(&self, input: &str) -> Result<CleanResult> {
         let mut text = Cow::Borrowed(input);
         let mut rules_fired = Vec::new();
+        let (rules, word_replacements) = self.rules.split_at(self.word_replacement_start);
 
         let mut index = 0;
-        while let Some(rule) = self.rules.get(index) {
+        while let Some(rule) = rules.get(index) {
             if let CompiledTransform::Numbers { threshold, .. } = &rule.transform {
                 let mut enabled = Vec::new();
                 while let Some(CompiledRule {
                     transform: CompiledTransform::Numbers { kind, .. },
                     ..
-                }) = self.rules.get(index)
+                }) = rules.get(index)
                 {
                     enabled.push(*kind);
                     index += 1;
@@ -491,6 +501,11 @@ impl Cleaner {
                 matches: transformed.matches,
             });
             text = Cow::Owned(transformed.text.into_owned());
+        }
+        if let Some(replaced) =
+            apply_word_replacements(word_replacements, text.as_ref(), &mut rules_fired)
+        {
+            text = Cow::Owned(replaced);
         }
 
         Ok(CleanResult {
@@ -676,6 +691,57 @@ fn push_user_rules(
         rules.push(compile_user_rule(rule)?);
     }
     Ok(())
+}
+
+fn apply_word_replacements(
+    rules: &[CompiledRule],
+    input: &str,
+    rules_fired: &mut Vec<RuleHit>,
+) -> Option<String> {
+    let mut replacements = BTreeMap::new();
+    for (index, rule) in rules.iter().enumerate() {
+        let CompiledTransform::Regex { re, replacement } = &rule.transform else {
+            unreachable!("word replacements compile to regex rules");
+        };
+        for matched in re.find_iter(input) {
+            // Whole-word matches can share a range when two keys case-fold
+            // to the same word. Keep the first enabled entry in key order.
+            replacements.entry(matched.start()).or_insert((
+                matched.end(),
+                index,
+                replacement.as_ref(),
+            ));
+        }
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+
+    let mut hits = vec![(0, false); rules.len()];
+    let mut previous_end = 0;
+    let edits = replacements
+        .into_iter()
+        .filter_map(|(start, (end, index, replacement))| {
+            if start < previous_end {
+                return None;
+            }
+            previous_end = end;
+
+            let (matches, changed) = &mut hits[index];
+            *matches += 1;
+            *changed |= &input[start..end] != replacement;
+            Some((start, end, replacement))
+        });
+    let output = super::passes::apply_replacements(input, edits).text;
+    for (rule, (matches, changed)) in rules.iter().zip(hits) {
+        if changed {
+            rules_fired.push(RuleHit {
+                name: rule.name.clone(),
+                matches,
+            });
+        }
+    }
+    Some(output.into_owned())
 }
 
 fn compute_ruleset_id(

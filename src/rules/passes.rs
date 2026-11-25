@@ -35,18 +35,15 @@ pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult<'_> {
         "apostrophe-cause regex must compile"
     );
 
-    let replacements = re
-        .captures_iter(input)
-        .map(|captures| {
-            let whole = captures.get(0).expect("capture zero must exist");
-            let attached = input[..whole.start()]
-                .chars()
-                .next_back()
-                .is_some_and(char::is_alphanumeric);
-            let replacement = if attached { " because" } else { "because" }.to_string();
-            (whole.start(), whole.end(), replacement)
-        })
-        .collect();
+    let replacements = re.captures_iter(input).map(|captures| {
+        let whole = captures.get(0).expect("capture zero must exist");
+        let attached = input[..whole.start()]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric);
+        let replacement = if attached { " because" } else { "because" };
+        (whole.start(), whole.end(), replacement)
+    });
 
     apply_replacements(input, replacements)
 }
@@ -80,17 +77,14 @@ pub(crate) fn normalize_apostrophe_cause(input: &str) -> TransformResult<'_> {
 pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult<'_> {
     let re = regex_static!(r"\b[A-Z](?: [A-Z])+\b", "spaced acronym regex must compile");
 
-    let replacements: Vec<(usize, usize, String)> = re
-        .find_iter(input)
-        .map(|found| {
-            let collapsed: String = found
-                .as_str()
-                .chars()
-                .filter(|character| character.is_ascii_uppercase())
-                .collect();
-            (found.start(), found.end(), collapsed)
-        })
-        .collect();
+    let replacements = re.find_iter(input).map(|found| {
+        let collapsed: String = found
+            .as_str()
+            .chars()
+            .filter(|character| character.is_ascii_uppercase())
+            .collect();
+        (found.start(), found.end(), collapsed)
+    });
 
     apply_replacements(input, replacements)
 }
@@ -111,24 +105,27 @@ pub(crate) fn normalize_spaced_acronyms(input: &str) -> TransformResult<'_> {
 /// Panics for overlapping ranges or offsets that are not UTF-8 boundaries.
 pub(super) fn apply_replacements(
     input: &str,
-    replacements: Vec<(usize, usize, String)>,
+    replacements: impl IntoIterator<Item = (usize, usize, impl AsRef<str>)>,
 ) -> TransformResult<'_> {
-    if replacements.is_empty() {
+    let mut replacements = replacements.into_iter().peekable();
+    if replacements.peek().is_none() {
         return unchanged(input);
     }
 
     let mut output = String::with_capacity(input.len());
     let mut last_end = 0;
-    for (start, end, replacement) in &replacements {
-        debug_assert!(*start >= last_end);
-        output.push_str(&input[last_end..*start]);
-        output.push_str(replacement);
-        last_end = *end;
+    let mut matches = 0;
+    for (start, end, replacement) in replacements {
+        debug_assert!(start >= last_end);
+        output.push_str(&input[last_end..start]);
+        output.push_str(replacement.as_ref());
+        last_end = end;
+        matches += 1;
     }
     output.push_str(&input[last_end..]);
     TransformResult {
         text: Cow::Owned(output),
-        matches: replacements.len(),
+        matches,
     }
 }
 

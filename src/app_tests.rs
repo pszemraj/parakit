@@ -24,11 +24,11 @@ fn word_replacements_reach_rules_and_both_daemon_backends() {
         })
         .collect();
     let input = format!(
-        "{}; quandary aquan quan_thing cost rust and RUST or Rust",
+        "{}; quandary aquan quan_thing cost rust and RUST or Rust. QUÁN, QUX and foo or bar",
         variants.join(", ")
     );
     let expected = format!(
-        "{}; quandary aquan quan_thing $5 Rust and RUST or Rust",
+        "{}; quandary aquan quan_thing $5 Rust and RUST or Rust. Quán, qwen3 and bar or foo",
         ["Qwen"; 16].join(", ")
     );
     for profile in ["safe", "aggressive"] {
@@ -36,7 +36,26 @@ fn word_replacements_reach_rules_and_both_daemon_backends() {
             "parakit-app-test",
             profile,
             &format!(
-                "[cleaning]\nprofile = '{profile}'\n[replacements]\nquan = 'Qwen'\ncost = {{ replacement = '$5' }}\nrust = {{ replacement = 'Rust', case_sensitive = true }}\n"
+                "
+                [cleaning]
+                profile = '{profile}'
+
+                [[rules.user]]
+                name = 'replace-word:rename-quen'
+                position = 'last'
+                pattern = '(QU)X'
+                replacement = '${{1}}EN'
+
+                [replacements]
+                quan = 'Qwen'
+                'quán' = 'Quán'
+                quen = 'qwen3'
+                qwen = 'qwen3'
+                foo = 'bar'
+                bar = 'foo'
+                cost = {{ replacement = '$5' }}
+                rust = {{ replacement = 'Rust', case_sensitive = true }}
+                "
             ),
         );
         let config = config::load_from_path(&path).unwrap();
@@ -51,14 +70,17 @@ fn word_replacements_reach_rules_and_both_daemon_backends() {
         let cleaner = build_rules_cleaner(&RulesArgs::default(), &config).unwrap();
         let result = cleaner.clean(&input);
         assert_eq!(result.text, expected);
-        assert!(result
-            .rules_fired
-            .iter()
-            .any(|hit| hit.name == "replace-word:quan" && hit.matches == 16));
-        assert!(result
-            .rules_fired
-            .iter()
-            .any(|hit| hit.name == "replace-word:rust" && hit.matches == 1));
+        for (name, matches) in [
+            ("replace-word:quan", Some(16)),
+            ("replace-word:rust", Some(1)),
+            ("replace-word:bar", Some(1)),
+            ("replace-word:foo", Some(1)),
+            ("replace-word:rename-quen", Some(1)),
+            ("replace-word:qwen", None),
+        ] {
+            let observed = result.rules_fired.iter().find(|hit| hit.name == name);
+            assert_eq!(observed.map(|hit| hit.matches), matches, "{name}");
+        }
     }
 }
 

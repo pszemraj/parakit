@@ -98,6 +98,18 @@ fn position_case(position: RulePosition) -> PositionCase {
             input: "done",
             expected: "done.",
         },
+        RulePosition::WordReplacement => PositionCase {
+            profile: CleaningProfile::Safe,
+            drop_trailing_period: true,
+            rule: user_rule(
+                "replace-word:done",
+                r"(?i)\bdone\b",
+                "done. $1",
+                RulePosition::WordReplacement,
+            ),
+            input: "done.",
+            expected: "done. $1",
+        },
     }
 }
 
@@ -107,6 +119,7 @@ fn user_rule_positions_are_all_ordered_correctly() {
         RulePosition::First,
         RulePosition::Standard,
         RulePosition::Last,
+        RulePosition::WordReplacement,
     ]
     .into_iter()
     .filter_map(|position| {
