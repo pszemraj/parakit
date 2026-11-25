@@ -52,7 +52,11 @@ pub(crate) struct ConfigFile {
 
 /// A simple correction or an inline table with explicit matching options.
 #[derive(Debug, Deserialize)]
-#[serde(untagged, deny_unknown_fields)]
+#[serde(
+    untagged,
+    deny_unknown_fields,
+    expecting = "a string or { replacement = \"...\", case_sensitive = bool }"
+)]
 pub(crate) enum WordReplacement {
     /// Literal replacement text, matched without regard to case.
     Text(String),
