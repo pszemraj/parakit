@@ -31,7 +31,7 @@
 //! * [`stutters`] - repeated-word collapsing and configured exceptions.
 //! * [`passes`] - other procedural transforms, including acronyms and
 //!   capitalization.
-//! * [`phrase_breaks`] - function-word punctuation repair and filled pauses.
+//! * [`phrase_breaks`] - punctuation repair around function words and filled pauses.
 //! * [`user`] - user-defined rules loaded from `config.toml`.
 //!
 //! ## How to disable a rule at runtime
@@ -75,7 +75,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 56;
+pub const CLEANER_VERSION: u32 = 57;
 
 /// Function-word punctuation passes enabled by default for Qwen dictation.
 pub const PHRASE_BREAK_RULES: &[&str] = &["merge-sentence-breaks", "function-word-commas"];

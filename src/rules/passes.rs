@@ -143,8 +143,16 @@ fn unchanged(input: &str) -> TransformResult<'_> {
 /// unambiguous connectives belong on this list.
 const DANGLING_CONNECTIVES: &[&str] = &["so", "but", "and", "or", "because"];
 
-fn is_dangling_connective(word: &str) -> bool {
-    DANGLING_CONNECTIVES
+/// Case-insensitive membership in a word list.
+///
+/// # Arguments
+/// * `word` - Word to look up.
+/// * `words` - Candidate spellings.
+///
+/// # Returns
+/// Whether `word` equals a member of `words`, ignoring ASCII case.
+pub(super) fn is_any(word: &str, words: &[&str]) -> bool {
+    words
         .iter()
         .any(|candidate| word.eq_ignore_ascii_case(candidate))
 }
@@ -209,7 +217,7 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult<'_> {
                 (!character.is_alphabetic()).then_some(index + character.len_utf8())
             })
             .unwrap_or(0);
-        if !is_dangling_connective(&head[word_start..]) {
+        if !is_any(&head[word_start..], DANGLING_CONNECTIVES) {
             break;
         }
         removed += 1;

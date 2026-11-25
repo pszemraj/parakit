@@ -111,19 +111,19 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
     ),
     procedural_rule!(
         "filled-pauses",
-        "Remove filled pauses and their punctuation while preserving preceding sentence ends",
+        "Remove filled pauses, and their punctuation after an unfinished phrase",
         Activation::Safe,
         remove_filled_pauses
     ),
     procedural_rule!(
         "merge-sentence-breaks",
-        "Merge clause-internal periods and question marks after function words",
+        "Merge periods and question marks inside a phrase or relative clause",
         Activation::Safe,
         merge_sentence_breaks
     ),
     procedural_rule!(
         "function-word-commas",
-        "Remove clause-internal commas after function words",
+        "Remove commas after function words inside a phrase",
         Activation::Safe,
         remove_function_word_commas
     ),

@@ -208,7 +208,7 @@ fn standalone_filler_sentences_leave_no_orphaned_punctuation() {
             ("Um. Then the furniture.", "Then the furniture."),
             ("Is it done? Um.", "Is it done?"),
             ("That is great! Uh.", "That is great!"),
-            ("Okay, um. Sure.", "Okay sure."),
+            ("Okay, um. Sure.", "Okay. Sure."),
             // Punctuation runs that no filler left behind stay intact,
             // whether or not the model spaced them.
             ("Wait... What?! Really?", "Wait... What?! Really?"),

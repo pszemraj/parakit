@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// A cleaner with both phrase-repair rules disabled by name.
+fn cleaner_without_phrase_repairs() -> Cleaner {
+    let disabled = ["merge-sentence-breaks", "function-word-commas"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[])
+}
+
 #[test]
 fn sentence_breaks_merge_function_word_continuations() {
     for profile in [CleaningProfile::Safe, CleaningProfile::Aggressive] {
@@ -47,8 +56,10 @@ fn sentence_merges_and_fillers_share_capitalization_exceptions() {
                 "Use our. example.com config.",
                 "Use our example.com config.",
             ),
-            ("Try um. Wednesday.", "Try Wednesday."),
-            ("Use um. API.", "Use API."),
+            ("Use my. May report.", "Use my. May report."),
+            ("Use our. March report.", "Use our march report."),
+            ("Try our um. Wednesday build.", "Try our Wednesday build."),
+            ("Use the um. API.", "Use the API."),
             ("Try um. I'll check.", "Try. I'll check."),
         ],
     );
@@ -61,17 +72,20 @@ fn filled_pauses_drop_their_terminal_punctuation() {
         &[
             ("In my um. Main config.", "In my main config."),
             (
-                "And. I um. Still only see this.",
-                "And I still only see this.",
+                "And. I um. Always forget this.",
+                "And I always forget this.",
             ),
             (
-                "Review came back. Um. This was local.",
-                "Review came back. This was local.",
+                "The oven stopped. Um. This was new.",
+                "The oven stopped. This was new.",
             ),
             ("In my uh? Main config.", "In my main config."),
             ("In my erm! Main config.", "In my main config."),
             ("In my um. Uh. Main config.", "In my main config."),
-            ("Read um. This. Um. Then stop.", "Read this. Then stop."),
+            (
+                "Read the um. List. Um. Then stop.",
+                "Read the list. Then stop.",
+            ),
             ("Use um. I think this.", "Use. I think this."),
             ("Done! Um. Next.", "Done! Next."),
             ("Done? Um. Next.", "Done? Next."),
@@ -80,18 +94,42 @@ fn filled_pauses_drop_their_terminal_punctuation() {
 }
 
 #[test]
-fn punctuation_preserves_clause_restarts_and_completed_questions() {
+fn filler_marks_stay_unless_the_phrase_is_unfinished() {
     assert_clean_cases(
         CleaningProfile::Safe,
         &[
+            // The words before the filler end a clause, or the next words start one.
             (
                 "The import finished um. We can continue.",
                 "The import finished. We can continue.",
             ),
             (
-                "The process stopped uh? Can it restart?",
-                "The process stopped? Can it restart?",
+                "I finished the report, um. Let's go to dinner.",
+                "I finished the report. Let's go to dinner.",
             ),
+            (
+                "We shipped it um. Then we went home.",
+                "We shipped it. Then we went home.",
+            ),
+            (
+                "We have the tooling um. Set a goal.",
+                "We have the tooling. Set a goal.",
+            ),
+            ("It works um. Thanks.", "It works. Thanks."),
+            ("Great um. Water the plants.", "Great. Water the plants."),
+            ("Is it ready um? Yes it is.", "Is it ready? Yes it is."),
+            (
+                "Ship it um! Now run the tests.",
+                "Ship it! Now run the tests.",
+            ),
+            ("What is the um?", "What is the?"),
+            (
+                "It is the pan we cook with um. The lid broke.",
+                "It is the pan we cook with. The lid broke.",
+            ),
+            // A phrase that one open-class word continues resumes after the pause.
+            ("Please um. Review carefully.", "Please review carefully."),
+            // An unfinished phrase takes the next word, or a subject after a wh-word.
             (
                 "Take the path and um. I will follow.",
                 "Take the path and I will follow.",
@@ -100,40 +138,21 @@ fn punctuation_preserves_clause_restarts_and_completed_questions() {
                 "I wonder if um. They can help.",
                 "I wonder if they can help.",
             ),
-            (
-                "It is stable but. And the rest needs work.",
-                "It is stable but. And the rest needs work.",
-            ),
-            ("Choose this or. Or that.", "Choose this or that."),
-            ("Check what um. It can do.", "Check what it can do."),
-            (
-                "The build failed um. It's recoverable.",
-                "The build failed. It's recoverable.",
-            ),
-            ("What is the um?", "What is the?"),
-            (
-                "The build finished um. The tests are running now.",
-                "The build finished. The tests are running now.",
-            ),
-            (
-                "I finished the report, um. Let's go to dinner.",
-                "I finished the report. Let's go to dinner.",
-            ),
-            ("Is it ready um? Yes it is.", "Is it ready? Yes it is."),
-            (
-                "Ship it um! Now run the tests.",
-                "Ship it! Now run the tests.",
-            ),
-            (
-                "We have the tooling um. Set a goal.",
-                "We have the tooling. Set a goal.",
-            ),
+            ("Wait and um. Stop um. Rest.", "Wait and stop. Rest."),
             ("Go to um. The main config.", "Go to the main config."),
+            ("Check what um. It can do.", "Check what it can do."),
+            ("What if um. I told you?", "What if I told you?"),
             (
                 "It depends on what um? We choose.",
                 "It depends on what we choose.",
             ),
             ("I um. Need a ride.", "I need a ride."),
+            // Conjunctions that differ keep their boundary.
+            (
+                "It is stable but. And the rest needs work.",
+                "It is stable but. And the rest needs work.",
+            ),
+            ("Choose this or. Or that.", "Choose this or that."),
         ],
     );
 }
@@ -149,8 +168,12 @@ fn commas_preserve_conjunction_asides_and_stranded_prepositions() {
                 "He took my, frankly, terrible advice.",
             ),
             (
-                "Use their, settings and his, defaults.",
-                "Use their settings and his defaults.",
+                "Use their, settings and our, defaults.",
+                "Use their settings and our defaults.",
+            ),
+            (
+                "The red one is his, mine is blue.",
+                "The red one is his, mine is blue.",
             ),
             (
                 "And, as I just realized, it works.",
@@ -180,21 +203,34 @@ fn contextual_merges_require_a_nominal_continuation() {
                 "Return to. The previous task.",
                 "Return to the previous task.",
             ),
-            ("The list of, a few choices.", "The list of a few choices."),
             ("Use the, larger window.", "Use the larger window."),
             ("Use my. Backup file.", "Use my backup file."),
-            (
-                "I need the. Actually forget it.",
-                "I need the. Actually forget it.",
-            ),
+            // A comma, contraction, or function word shows a restart.
             (
                 "I went to the. Well, never mind.",
                 "I went to the. Well, never mind.",
             ),
             (
-                "I need the. Let’s start over.",
-                "I need the. Let’s start over.",
+                "I need the. We’ll start over.",
+                "I need the. We’ll start over.",
             ),
+            (
+                "I forgot the. After lunch I remembered.",
+                "I forgot the. After lunch I remembered.",
+            ),
+            (
+                "Use my. Some of those are missing.",
+                "Use my. Some of those are missing.",
+            ),
+            (
+                "Use the, that was unexpected.",
+                "Use the, that was unexpected.",
+            ),
+            (
+                "It came from. This older version.",
+                "It came from. This older version.",
+            ),
+            // A pronoun can end a clause, and a letter can be a label.
             (
                 "That jacket is his. Make sure it gets returned.",
                 "That jacket is his. Make sure it gets returned.",
@@ -205,39 +241,8 @@ fn contextual_merges_require_a_nominal_continuation() {
             ),
             ("Did you say its? Tell me.", "Did you say its? Tell me."),
             (
-                "I forgot the. After lunch I remembered.",
-                "I forgot the. After lunch I remembered.",
-            ),
-            (
-                "Use my. Some of those are missing.",
-                "Use my. Some of those are missing.",
-            ),
-            (
-                "Use the, that was unexpected.",
-                "Use the, that was unexpected.",
-            ),
-            (
                 "Choose method A. Then proceed.",
                 "Choose method A. Then proceed.",
-            ),
-            (
-                "It came from. This older version.",
-                "It came from. This older version.",
-            ),
-            (
-                "It came from. This is the source.",
-                "It came from. This is the source.",
-            ),
-            ("Choose red or, blue.", "Choose red or, blue."),
-            ("And, frankly, I disagree.", "And, frankly, I disagree."),
-            ("Wait or, perhaps, proceed.", "Wait or, perhaps, proceed."),
-            (
-                "And, without warning. It stopped.",
-                "And, without warning. It stopped.",
-            ),
-            (
-                "We stopped and, without warning, it restarted.",
-                "We stopped and, without warning, it restarted.",
             ),
             (
                 "Review item a. Critical behavior follows.",
@@ -246,6 +251,13 @@ fn contextual_merges_require_a_nominal_continuation() {
             (
                 "a. Critical behavior follows.",
                 "A. Critical behavior follows.",
+            ),
+            // A coordinator opens an aside, so its comma stays.
+            ("Choose red or, blue.", "Choose red or, blue."),
+            ("And, frankly, I disagree.", "And, frankly, I disagree."),
+            (
+                "And, without warning. It stopped.",
+                "And, without warning. It stopped.",
             ),
         ],
     );
@@ -263,8 +275,8 @@ fn phrase_repairs_distinguish_complements_from_ambiguous_boundaries() {
             ("I want to. ", "I want to."),
             ("Do it so. Then stop.", "Do it so. Then stop."),
             (
-                "Before I return to. The original. Topic I was discussing.",
-                "Before I return to the original. Topic I was discussing.",
+                "Before we drive to. The northern. Coast they described.",
+                "Before we drive to the northern. Coast they described.",
             ),
             (
                 "That is. A unedited example.",
@@ -272,38 +284,22 @@ fn phrase_repairs_distinguish_complements_from_ambiguous_boundaries() {
             ),
             ("I will. Add the log.", "I will. Add the log."),
             (
-                "Segmentation of, a stream of text into, phrases.",
-                "Segmentation of a stream of text into, phrases.",
+                "Division of, a pile of fruit into, baskets.",
+                "Division of a pile of fruit into baskets.",
             ),
             ("One of the, easier bits.", "One of the easier bits."),
             (
                 "That's what I know of. Then stop.",
                 "That's what I know of. Then stop.",
             ),
+            // A wh-clause or relative clause can supply the preposition's object.
             (
                 "Where did it come from? I forgot.",
                 "Where did it come from? I forgot.",
             ),
-            ("I'm standing by. Call me.", "I'm standing by. Call me."),
             (
-                "That's where the error is coming from. The fix is simple.",
-                "That's where the error is coming from. The fix is simple.",
-            ),
-            (
-                "I know who you're talking to. My manager told me.",
-                "I know who you're talking to. My manager told me.",
-            ),
-            (
-                "Check what I set it to. The other question can wait.",
-                "Check what I set it to. The other question can wait.",
-            ),
-            (
-                "That’s the team I spoke with. Our manager agreed.",
-                "That’s the team I spoke with. Our manager agreed.",
-            ),
-            (
-                "It is the one I came with. The rest stayed home.",
-                "It is the one I came with. The rest stayed home.",
+                "Look at what they tied it to. The second rope can wait.",
+                "Look at what they tied it to. The second rope can wait.",
             ),
             (
                 "I know what example.com is linked to. The new address works.",
@@ -313,11 +309,6 @@ fn phrase_repairs_distinguish_complements_from_ambiguous_boundaries() {
                 "Who called? Return to. The previous task.",
                 "Who called? Return to the previous task.",
             ),
-            (
-                "Which one do you agree with? I forgot.",
-                "Which one do you agree with? I forgot.",
-            ),
-            ("Use method A. Then stop.", "Use method A. Then stop."),
             ("First, a. How does it work?", "First, a. How does it work?"),
             (
                 "Logical. Pieces and practical. Feedback.",
@@ -344,11 +335,7 @@ fn punctuation_repairs_report_counts_and_obey_disabling() {
         hits,
         [("merge-sentence-breaks", 2), ("function-word-commas", 1)]
     );
-    let disabled = PHRASE_BREAK_RULES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    let cleaner = cleaner_without_phrase_repairs();
     assert_eq!(
         cleaner.clean_text("Use our. Setup and their, defaults."),
         "Use our. Setup and their, defaults."
@@ -377,11 +364,7 @@ fn punctuation_repair_preserves_unrelated_boundaries_and_is_idempotent() {
 
 #[test]
 fn filler_chain_context_does_not_depend_on_phrase_repairs() {
-    let disabled = PHRASE_BREAK_RULES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &disabled, &[]);
+    let cleaner = cleaner_without_phrase_repairs();
     assert_eq!(
         cleaner.clean_text("Continue and um. Uh. I will follow."),
         "Continue and I will follow."
@@ -393,5 +376,169 @@ fn filler_chain_context_does_not_depend_on_phrase_repairs() {
     assert_eq!(
         cleaner.clean_text("Is it ready um? Uh. Yes it is."),
         "Is it ready? Yes it is."
+    );
+}
+
+#[test]
+fn sentence_merges_follow_words_that_cannot_end_a_sentence() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // Conjunctions introduce a clause or phrase of any kind.
+            (
+                "We left early because. The roof leaked.",
+                "We left early because the roof leaked.",
+            ),
+            (
+                "She went despite. Having a cold.",
+                "She went despite having a cold.",
+            ),
+            (
+                "Bring soup or. If you forget, bread.",
+                "Bring soup or if you forget, bread.",
+            ),
+            ("It rained, but. And then.", "It rained, but. And then."),
+            // Determiners need an open-class word.
+            (
+                "Hand me the. Ladder from the garage.",
+                "Hand me the ladder from the garage.",
+            ),
+            ("Hand me the. They are late.", "Hand me the. They are late."),
+            (
+                "I want the. Sorry, the big one.",
+                "I want the. Sorry, the big one.",
+            ),
+            // A pronoun can end a clause or an inverted question, so it never joins.
+            (
+                "Then they. Painted the fence.",
+                "Then they. Painted the fence.",
+            ),
+            (
+                "Where shall we? Let's start.",
+                "Where shall we? Let's start.",
+            ),
+            (
+                "Review phase I. Budget follows.",
+                "Review phase I. Budget follows.",
+            ),
+        ],
+    );
+}
+
+#[test]
+fn sentence_merges_keep_stranded_prepositions() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "The box holds twice the weight of. Regular crates.",
+                "The box holds twice the weight of regular crates.",
+            ),
+            (
+                "They plan to walk to. The station.",
+                "They plan to walk to the station.",
+            ),
+            (
+                "This is the model we started with. The loss was high.",
+                "This is the model we started with. The loss was high.",
+            ),
+            (
+                "Use the key that he came with. Our spare is lost.",
+                "Use the key that he came with. Our spare is lost.",
+            ),
+            (
+                "That leaves two chores to take care of. Please help.",
+                "That leaves two chores to take care of. Please help.",
+            ),
+            (
+                "Is this made of? Metal bends.",
+                "Is this made of? Metal bends.",
+            ),
+            // An elided infinitive and adverbial particles can end a clause.
+            (
+                "They never want to. Rain helps.",
+                "They never want to. Rain helps.",
+            ),
+            ("Hold on. Dinner is ready.", "Hold on. Dinner is ready."),
+        ],
+    );
+}
+
+#[test]
+fn only_an_open_relative_clause_merges_across_a_period() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "Pick apples that are. Slightly green.",
+                "Pick apples that are slightly green.",
+            ),
+            (
+                "He sold the boat, which is. A real shame.",
+                "He sold the boat, which is a real shame.",
+            ),
+            ("I know that is. The answer.", "I know that is. The answer."),
+            (
+                "Bake some loaves. That are easy to slice.",
+                "Bake some loaves. That are easy to slice.",
+            ),
+            (
+                "We repaired the old gate. That is enough.",
+                "We repaired the old gate. That is enough.",
+            ),
+            (
+                "This works so well. Is anyone free today?",
+                "This works so well. Is anyone free today?",
+            ),
+            ("Great. Is fixed now.", "Great. Is fixed now."),
+        ],
+    );
+}
+
+#[test]
+fn function_word_commas_need_an_unfinished_phrase() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("The walls of, cheap houses.", "The walls of cheap houses."),
+            (
+                "The walls of, the, old house.",
+                "The walls of the old house.",
+            ),
+            (
+                "Wait until we, finish lunch.",
+                "Wait until we finish lunch.",
+            ),
+            // A subordinator joins a pronoun subject, but not another clause start.
+            (
+                "They stayed because, it was raining.",
+                "They stayed because it was raining.",
+            ),
+            (
+                "They left because, the roof leaked.",
+                "They left because, the roof leaked.",
+            ),
+            (
+                "Because, it was raining hard.",
+                "Because, it was raining hard.",
+            ),
+            (
+                "Check if, for example, it rained.",
+                "Check if, for example, it rained.",
+            ),
+            (
+                "A fan of, oddly enough, cold soup.",
+                "A fan of, oddly enough, cold soup.",
+            ),
+            ("This kind of, you know.", "This kind of, you know."),
+            (
+                "That is who I travel with, usually by train.",
+                "That is who I travel with, usually by train.",
+            ),
+            (
+                "We all went in, shut the door.",
+                "We all went in, shut the door.",
+            ),
+        ],
     );
 }
