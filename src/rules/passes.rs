@@ -260,10 +260,11 @@ pub(crate) fn drop_dangling_connective(input: &str) -> TransformResult<'_> {
 /// those are never corrupted. Existing mixed-case tokens such as `macOS`,
 /// `iOS`, and `eBay` are also preserved. A `.`, `!`, or `?` opens a new
 /// sentence only when [`punctuation_is_sentence_boundary`] agrees. Only the
-/// first letter of a whitespace-delimited token, optionally preceded by opening
-/// quotes, brackets, or a leading dash, may be capitalized. Embedded punctuation
-/// never changes case inside a filename, path, URL, or identifier. Decimal,
-/// version, and abbreviation periods do not start a new sentence.
+/// first letter of a whitespace-delimited token may be capitalized, allowing
+/// opening quotes, brackets, inverted question and exclamation marks, emphasis
+/// asterisks, or a leading dash. Embedded punctuation never changes case inside
+/// a filename, path, URL, or identifier. Decimal, version, and abbreviation
+/// periods do not start a new sentence.
 ///
 /// # Returns
 ///
@@ -355,7 +356,7 @@ fn preserve_sentence_start_token_case(input: &str, byte_index: usize) -> bool {
     let prefix = input[token_start..byte_index].trim_start_matches(|character| {
         matches!(
             character,
-            '\'' | '"' | '(' | '[' | '{' | '<' | '‘' | '“' | '«'
+            '\'' | '"' | '(' | '[' | '{' | '<' | '‘' | '“' | '«' | '¿' | '¡' | '*'
         )
     });
     if !matches!(prefix, "" | "-" | "–" | "—") {

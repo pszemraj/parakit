@@ -69,7 +69,7 @@ For every model, `filled-pauses` drops a deleted filler's punctuation when conti
 
 The default pipeline favors structural rules over product- or vocabulary-specific substitutions.
 
-Sentence capitalization changes only the first letter of a whitespace-delimited token, allowing opening quotes, brackets, or a leading dash before it. It preserves case inside dotfiles, filenames, paths, URLs, and identifiers, including `__init__.py` and `.gitignore`. It does not lowercase capitalization already supplied by the model or translate literal spoken `dot`/`point` into punctuation.
+Sentence capitalization changes only the first letter of a whitespace-delimited token, allowing opening quotes, brackets, inverted question and exclamation marks, emphasis asterisks, or a leading dash before it. It preserves case inside dotfiles, filenames, paths, URLs, and identifiers such as `#general`, `__init__.py`, and `.gitignore`. It does not lowercase capitalization already supplied by the model or translate literal spoken `dot`/`point` into punctuation.
 
 ### Acronyms
 

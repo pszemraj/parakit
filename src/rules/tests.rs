@@ -439,6 +439,7 @@ fn capitalization_never_changes_letters_inside_technical_tokens() {
         "/usr/bin/parakit starts the daemon.",
         "~/Projects/parakit contains the source.",
         "--config selects a file.",
+        "#general is the default channel.",
         "Use foo!bar and foo?bar identifiers.",
         "Use foo!\"bar and foo?'bar identifiers.",
         "Visit https://example.com/.config and https://example.com/a!b.",
@@ -469,6 +470,9 @@ fn capitalization_keeps_real_sentence_starts_after_separators_and_opening_quotes
                 ("done. [next]", "Done. [Next]"),
                 ("done. “next”", "Done. “Next”"),
                 ("done. 'next'", "Done. 'Next'"),
+                ("¿cómo estás? ¡bien!", "¿Cómo estás? ¡Bien!"),
+                ("done. *next*.", "Done. *Next*."),
+                ("done. **next**.", "Done. **Next**."),
                 ("-oh. yes.", "-Oh. Yes."),
                 ("—oh. yes.", "—Oh. Yes."),
                 (
