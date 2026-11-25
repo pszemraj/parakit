@@ -87,6 +87,52 @@ pub struct UserRule {
     pub position: RulePosition,
 }
 
+impl UserRule {
+    /// Build the generated whole-word rule for one `[replacements]` entry.
+    ///
+    /// The rule is named `replace-word:<lowercase source>` and uses
+    /// [`RulePosition::WordReplacement`], so it applies after every other rule.
+    /// Replacements apply after whitespace cleanup, so an empty one would leave
+    /// doubled or stray spaces; deleting a word needs a regular user rule.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - Word to replace; one nonempty run of word characters.
+    /// * `replacement` - Literal output text; never `$`-expanded and never blank.
+    /// * `case_sensitive` - Require the source word's exact capitalization.
+    ///
+    /// # Returns
+    ///
+    /// The whole-word [`UserRule`] for `source`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming `source` when it is not one nonempty word or when
+    /// `replacement` is empty or whitespace-only.
+    pub fn word_replacement(source: &str, replacement: &str, case_sensitive: bool) -> Result<Self> {
+        if !regex_static!(r"^\w+$", "word pattern must compile").is_match(source) {
+            return Err(anyhow!(
+                "replacements key {source:?} must be one nonempty word"
+            ));
+        }
+        if replacement.trim().is_empty() {
+            return Err(anyhow!(
+                "replacements key {source:?} has an empty replacement; delete words with a [[rules.user]] rule instead"
+            ));
+        }
+        let flags = if case_sensitive { "" } else { "(?i)" };
+        Ok(Self {
+            name: format!("replace-word:{}", source.to_lowercase()),
+            description: Some(format!(
+                "Replace {source:?} with {replacement:?} (case sensitive: {case_sensitive})"
+            )),
+            pattern: format!(r"{flags}\b{}\b", regex::escape(source)),
+            replacement: replacement.to_owned(),
+            position: RulePosition::WordReplacement,
+        })
+    }
+}
+
 /// Validate that every user rule has a canonical, non-empty name and a
 /// non-empty pattern, that no user rule collides with a built-in name, and
 /// that no two user rules share a name. A canonical name has no leading or

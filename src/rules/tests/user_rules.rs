@@ -267,6 +267,32 @@ fn user_rule_validation_rejections() {
 }
 
 #[test]
+fn word_replacement_rules_validate_and_apply_literally_as_a_swap_pair() {
+    for (source, replacement, expected) in [
+        ("", "x", "one nonempty word"),
+        ("two words", "x", "one nonempty word"),
+        ("basically", "", "[[rules.user]]"),
+        ("basically", " \t", "empty replacement"),
+    ] {
+        let message = UserRule::word_replacement(source, replacement, false)
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(expected), "{message}");
+        assert!(message.contains(&format!("{source:?}")), "{message}");
+    }
+
+    let rules: Vec<UserRule> = [("Foo", "bar $1"), ("bar", "foo")]
+        .into_iter()
+        .map(|(source, replacement)| UserRule::word_replacement(source, replacement, false))
+        .collect::<Result<_>>()
+        .unwrap();
+    assert_eq!(rules[0].name, "replace-word:foo");
+    assert_eq!(rules[0].position, RulePosition::WordReplacement);
+    let cleaner = build_cleaner_for_test(CleaningProfile::Safe, false, &HashSet::new(), &rules);
+    assert_eq!(cleaner.clean_text("foo, bar."), "bar $1, foo.");
+}
+
+#[test]
 fn whitespace_only_user_rule_pattern_is_accepted_as_a_literal_pattern() {
     // Only a missing literal pattern value is rejected. A whitespace-only
     // pattern is a normal (if unusual) regex that matches a literal space.

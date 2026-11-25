@@ -184,7 +184,7 @@ backend = "auto"
 # Disable as replace-word:<lowercase source> through cleaning.disabled_rules.
 # See: [matching and preview](cleaning-rules.md#word-replacements).
 [replacements]
-# string. Literal output retaining case and $ characters, empty to delete. Whole-word matching ignores case.
+# string. Literal output retaining case and $ characters; must be nonempty, so delete words with a [[rules.user]] rule instead. Whole-word matching ignores case.
 # quan = "Qwen"
 # inline table. Required replacement (literal string, as above). case_sensitive (bool, default false) matches exact case when true.
 # rust = { replacement = "Rust", case_sensitive = true }

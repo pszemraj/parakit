@@ -36,6 +36,13 @@ fn invalid_word_replacements_fail_load_even_when_cleaning_is_disabled() {
     for (name, text, expected) in [
         ("empty", "'' = 'Qwen'", "one nonempty word"),
         ("phrase", "'some word' = 'Qwen'", "one nonempty word"),
+        ("empty-text", "basically = ''", "key \"basically\""),
+        ("blank-text", "basically = '  '", "[[rules.user]]"),
+        (
+            "empty-table",
+            "basically = { replacement = '', case_sensitive = true }",
+            "delete words with a [[rules.user]] rule",
+        ),
         ("pattern", "'quan.*' = 'Qwen'", "one nonempty word"),
         ("type", "quan = 3", expected_shape),
         (

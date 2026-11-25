@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use parakit::inference::DeviceMode;
 use parakit::model::{ModelPreset, ModelQuantization};
 use parakit::qwen::QwenOptions;
-use parakit::rules::{CleaningProfile, RulePosition, UserRule};
+use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
@@ -97,32 +97,15 @@ impl ConfigFile {
     /// User rules followed by word corrections, which apply together after all other cleaning.
     ///
     /// # Errors
-    /// Returns an error when a replacement key is not one nonempty word.
-    ///
-    /// # Panics
-    /// The fixed word-validation regex is valid.
+    /// Returns an error when a replacement key is not one nonempty word or its replacement is blank.
     pub(crate) fn effective_user_rules(&self) -> Result<Vec<UserRule>> {
         let mut rules = self.rules.user.clone();
-        if self.replacements.is_empty() {
-            return Ok(rules);
-        }
-        let word = regex::Regex::new(r"^\w+$").expect("word pattern must compile");
         for (source, target) in &self.replacements {
-            if !word.is_match(source) {
-                anyhow::bail!("replacements key {source:?} must be one nonempty word");
-            }
-            let flags = if target.case_sensitive() { "" } else { "(?i)" };
-            let replacement = target.replacement();
-            rules.push(UserRule {
-                name: format!("replace-word:{}", source.to_lowercase()),
-                description: Some(format!(
-                    "Replace {source:?} with {replacement:?} (case sensitive: {})",
-                    target.case_sensitive()
-                )),
-                pattern: format!(r"{flags}\b{}\b", regex::escape(source)),
-                replacement: replacement.to_owned(),
-                position: RulePosition::WordReplacement,
-            });
+            rules.push(UserRule::word_replacement(
+                source,
+                target.replacement(),
+                target.case_sensitive(),
+            )?);
         }
         Ok(rules)
     }
