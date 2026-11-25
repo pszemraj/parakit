@@ -583,9 +583,7 @@ fn effective_disabled_rules_merges_cli_and_config_without_duplicates() {
         "--disable-rule",
         "lead-discourse-comma",
     ]);
-    let mut merged = start
-        .cleaning_overrides
-        .effective_disabled_rules(&config, true);
+    let mut merged = start.cleaning_overrides.effective_disabled_rules(&config);
     merged.sort();
     let mut expected = vec![
         "filled-pauses".to_string(),

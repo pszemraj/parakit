@@ -22,7 +22,7 @@ model_preset = "qwen3-asr-1.7b"
 enabled = false
 ```
 
-These examples disable English transcript cleanup for multilingual speech. To keep cleaning enabled, see [Qwen's phrase repairs](../cleaning-rules.md#function-word-punctuation).
+These examples disable English transcript cleanup for multilingual speech.
 
 `--qwen-language en` (or `English`) selects English as the source language. The default, `auto`, detects the language from audio. `--qwen-max-new-tokens N` sets the per-chunk generation budget. Both apply to Qwen presets and local GGUF files loaded by the Qwen backend. See `[qwen]` in the [configuration reference](../config_reference.toml) for other languages, bounds, and defaults.
 

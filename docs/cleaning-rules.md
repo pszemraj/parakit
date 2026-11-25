@@ -49,17 +49,25 @@ parakit start --no-cleaning
 
 ### Function-word Punctuation
 
-Both profiles include `merge-sentence-breaks` and `function-word-commas`. The daemon enables them by default when the loaded model uses the Qwen backend, including custom model files. Set `cleaning.phrase_breaks` or pass `--phrase-breaks true` or `--phrase-breaks false` to override that default. Individual [rule disables](#inspect-and-test) take precedence.
+Both profiles include `merge-sentence-breaks` and `function-word-commas` for every model. Disable either by name with `--disable-rule` or [`cleaning.disabled_rules`](config_reference.toml); see [Inspect and Test](#inspect-and-test).
 
-Sentence merging joins incomplete phrases such as `and. Fails`, `the. Larger file`, and `to. The previous task`. A preposition needs a following article or possessive determiner and a plausible noun phrase. A wh-clause can end in a preposition, so `what I set it to. The other question` keeps its period. Different consecutive conjunctions, such as `but. And`, also retain their boundary.
+The passes consult closed grammatical classes only (conjunctions, articles and possessives, pronouns, prepositions, wh-words, auxiliaries), and a mark goes only when those words show that the sentence continues. A boundary that only ordinary vocabulary could settle, such as an adjective split from its noun (`Logical. Pieces`), stays as transcribed.
 
-After a merge, the next word loses its sentence-initial capital. The pass preserves `I` and its contractions, acronyms and other mixed-case tokens, dotted tokens, and English weekday and month names. Use [word replacements](#word-replacements) for personal names.
+Sentence merging removes a period after a word that cannot end a sentence. A coordinator or a subordinator such as `because` or `if` joins whatever follows, as in `and. Fails` and `because. The roof leaked`, except that different consecutive coordinators such as `but. And` keep their boundary. An article or possessive joins an ordinary word (`the. Larger file`) but not a function word or a word set off by a comma, so `the. They are late` and `the. Sorry, the big one` keep their periods. Question marks merge only after conjunctions and those articles and possessives.
 
-Comma removal uses the same phrase evidence. It repairs `the, larger file` and `of, a stream` while preserving paired commas in `my, frankly, terrible advice`. Both passes preserve recognized clause starts, abandoned determiner phrases such as `the. Actually forget it`, and single-letter labels. Question-mark merging is limited to `an`, `your`, `our`, `their`, `and`, `or`, and `but`.
+The prepositions `to`, `of`, `into`, `from`, `with`, `for`, and `without` join an article or possessive, as in `to. The previous task`. They keep the period when a wh-clause or relative clause can supply their object, as in `what they tied it to. The second rope`, and after an infinitive such as `to take care of. Please help`. Adverbial particles such as `on` and nominative pronouns never merge: `Hold on. Dinner is ready`, `Then they. Painted the fence`, and `Where shall we? Let's start` stay as spoken.
+
+The only merge into a following clause is the relative clause split after `which is` or `that are` (`apples that are. Slightly green`). Other sentence starts, including `This works so well. Is anyone free today?`, keep their boundary.
+
+After a merge, the next word loses its sentence-initial capital. The pass preserves `I` and its contractions, acronyms and other mixed-case tokens, dotted tokens, and English weekday and month names except `March` and `May`. Use [word replacements](#word-replacements) for personal names.
+
+Comma removal uses the same evidence. It repairs `the, larger file` and `of, a pile` while preserving a pair of commas around an aside, as in `my, frankly, terrible advice`. A coordinator keeps its comma. A subordinator keeps it at the start of a sentence, and elsewhere loses it only before a pronoun subject (`because, it was raining`, but `because, the roof leaked`). Single-letter labels such as `A, then B` are left alone.
 
 ### Filled Pauses
 
-`filled-pauses` is independent of the function-word setting and runs for every model. It removes a hesitation and its punctuation inside a phrase, so `go to um. The main config` becomes `go to the main config`. For likely clause restarts, it retains the mark in `Is it ready um? Yes` or `The task ended um. We can leave`. A preceding connective can introduce a clause, so `and um. I can help` becomes `and I can help`.
+`filled-pauses` runs for every model. It removes the hesitation, and its mark when the words before it cannot end a sentence. `go to um. The main config` becomes `go to the main config`, and `and um. I can help` becomes `and I can help`. A wh-word also joins a following subject pronoun, so `Check what um. It can do` becomes `Check what it can do`.
+
+After a complete phrase, a period also goes when an ordinary word resumes it, as in `Please um. Review carefully`. The period stays before a lone word (`It works um. Thanks`), a contraction (`the report, um. Let's go`), a subject after the first word (`We shipped it um. Then we went home`), a determiner after the first word (`the tooling um. Set a goal`), and any function word. Question and exclamation marks stay, as in `Is it ready um? Yes`.
 
 ### Sentence Capitalization
 
@@ -189,8 +197,6 @@ parakit start \
 ```
 
 Set the same names persistently with [`cleaning.disabled_rules`](config_reference.toml).
-
-Rule previews use `daemon.model_preset` to decide the default for [function-word punctuation](#function-word-punctuation). Pass `--phrase-breaks true` to preview the default for a custom Qwen GGUF.
 
 ## Rule Order
 

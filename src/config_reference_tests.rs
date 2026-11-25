@@ -360,10 +360,6 @@ fn effective_snapshot(config: &ConfigFile) -> BTreeMap<&'static str, String> {
     put("cleaning.enabled", config.cleaning.enabled().to_string());
     put("cleaning.profile", cleaner.profile().to_string());
     put(
-        "cleaning.phrase_breaks",
-        format!("{:?}", config.cleaning.phrase_breaks),
-    );
-    put(
         "cleaning.keep_trailing_period",
         (!cleaner.drops_trailing_period()).to_string(),
     );

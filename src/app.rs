@@ -194,9 +194,7 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
                 args.effective_cleaning_profile(&config),
                 args.cleaning_overrides
                     .effective_drops_trailing_period(&config),
-                &args
-                    .cleaning_overrides
-                    .effective_disabled_rules(&config, configured_qwen(&config)),
+                &args.cleaning_overrides.effective_disabled_rules(&config),
                 &config.effective_user_rules()?,
                 cli.quiet,
             )?;
@@ -309,10 +307,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         model::validate_model_file(&path)?;
     }
 
-    for name in &start.cleaning_overrides.disable_rule {
-        rules::assert_rule_name_exists(name, &config.effective_user_rules()?)?;
-    }
-
     if !start.simulate_ptt_audio.is_empty() {
         return run_ptt_audio_simulation(
             cli,
@@ -379,6 +373,7 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
     )
     .context("start daemon control socket")?;
 
+    let cleaner = build_cli_cleaner(start, &config)?.map(Arc::new);
     let sounds_enabled = start.effective_sounds_enabled(&config);
     let sounds = Sounds::new(sounds_enabled);
 
@@ -397,7 +392,6 @@ fn run_daemon(cli: &Cli, start: &StartCli) -> Result<()> {
         device_summary,
         recipe,
     } = open_cli_engine(start, &config, verbose, cli.quiet, &log)?;
-    let cleaner = build_cli_cleaner(start, &config, engine.backend() == "qwen3")?.map(Arc::new);
     let model_dtype = model_dtype_label(&model_path);
     let context_shortcut_enabled = engine.qwen_options().is_some()
         && config
@@ -713,11 +707,7 @@ fn resolve_worker_settings(
     )
 }
 
-fn build_cli_cleaner(
-    start: &StartCli,
-    config: &ConfigFile,
-    qwen: bool,
-) -> Result<Option<rules::Cleaner>> {
+fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rules::Cleaner>> {
     rules::build_cleaner(
         !start.effective_cleaning_enabled(config),
         start.effective_cleaning_profile(config),
@@ -726,9 +716,7 @@ fn build_cli_cleaner(
             .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
-        &start
-            .cleaning_overrides
-            .effective_disabled_rules(config, qwen),
+        &start.cleaning_overrides.effective_disabled_rules(config),
         &config.effective_user_rules()?,
     )
 }
@@ -744,19 +732,9 @@ fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::C
             .effective_drops_trailing_period(config),
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
-        &args
-            .cleaning_overrides
-            .effective_disabled_rules(config, configured_qwen(config)),
+        &args.cleaning_overrides.effective_disabled_rules(config),
         &config.effective_user_rules()?,
     )
-}
-
-/// Whether the configured preset supplies Qwen defaults to rule inspection.
-fn configured_qwen(config: &ConfigFile) -> bool {
-    config
-        .daemon
-        .model_preset
-        .is_some_and(|preset| preset.backend() == "qwen3")
 }
 
 fn model_dtype_label(path: &std::path::Path) -> String {

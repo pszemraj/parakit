@@ -33,6 +33,7 @@ pub(super) fn run_ptt_audio_simulation(
     audio_paths: &[PathBuf],
 ) -> Result<()> {
     let verbose = cli.effective_verbose(config);
+    let cleaner = build_cli_cleaner(start, config)?.map(Arc::new);
     let timeout = idle_timeout(settings.model_idle_minutes);
     let idle = Duration::from_secs(start.simulate_ptt_idle_seconds.unwrap_or(0));
     let repeats = start.simulate_ptt_repeat.map_or(1, NonZeroUsize::get);
@@ -52,7 +53,6 @@ pub(super) fn run_ptt_audio_simulation(
     ));
     let OpenedEngine { engine, recipe, .. } =
         open_cli_engine(start, config, verbose, cli.quiet || !verbose, &log)?;
-    let cleaner = build_cli_cleaner(start, config, engine.backend() == "qwen3")?.map(Arc::new);
     let context_enabled = engine.qwen_options().is_some()
         && settings.context_on_default_hotkey
         && config

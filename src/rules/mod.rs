@@ -77,9 +77,6 @@ pub use user::{RulePosition, UserRule};
 /// Keep revisions distinct even when their package version is unchanged.
 pub const CLEANER_VERSION: u32 = 57;
 
-/// Function-word punctuation passes enabled by default for Qwen dictation.
-pub const PHRASE_BREAK_RULES: &[&str] = &["merge-sentence-breaks", "function-word-commas"];
-
 /// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.
 ///
@@ -199,10 +196,6 @@ pub struct CleanResult {
 /// user rule name, an empty user rule pattern, a user rule name colliding with
 /// a built-in name, a duplicate user rule name, an invalid user rule regex,
 /// or an empty or non-word repetition exception.
-///
-/// Model-aware callers exclude [`PHRASE_BREAK_RULES`] through `disabled_rules`
-/// when function-word punctuation repair is not wanted. This library builder
-/// has no model context and includes those passes in both profiles.
 pub fn build_cleaner(
     no_cleaning: bool,
     profile: CleaningProfile,

@@ -5,9 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use parakit::rules::{
-    build_cleaner, CleaningProfile, RuleHit, CLEANER_VERSION, PHRASE_BREAK_RULES,
-};
+use parakit::rules::{build_cleaner, CleaningProfile, RuleHit, CLEANER_VERSION};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -31,10 +29,6 @@ struct Cli {
         value_parser = clap::value_parser!(CleaningProfile)
     )]
     profile: CleaningProfile,
-
-    /// Enable function-word punctuation repair (use true for Qwen logs).
-    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
-    phrase_breaks: bool,
 
     /// Keep terminal periods instead of applying the messaging-style default.
     #[arg(long)]
@@ -85,7 +79,6 @@ struct AuditReport<'a> {
     report_schema: u32,
     cleaner_version: u32,
     profile: &'a str,
-    phrase_breaks: bool,
     drop_trailing_period: bool,
     number_threshold: f64,
     ruleset_id: &'a str,
@@ -110,17 +103,13 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    let mut disabled = cli.disable_rule.clone();
-    if !cli.phrase_breaks {
-        disabled.extend(PHRASE_BREAK_RULES.iter().map(|name| (*name).to_owned()));
-    }
     let cleaner = build_cleaner(
         false,
         cli.profile,
         !cli.keep_trailing_period,
         cli.number_threshold,
         &[],
-        &disabled,
+        &cli.disable_rule,
         &[],
     )?
     .expect("cleaning is explicitly enabled for the audit target");
@@ -216,7 +205,6 @@ fn run() -> Result<()> {
         report_schema: 2,
         cleaner_version: CLEANER_VERSION,
         profile: cleaner.profile().as_str(),
-        phrase_breaks: cli.phrase_breaks,
         drop_trailing_period: cleaner.drops_trailing_period(),
         number_threshold: cleaner.number_threshold(),
         ruleset_id: cleaner.ruleset_id(),
