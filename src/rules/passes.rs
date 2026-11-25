@@ -332,7 +332,20 @@ pub(crate) fn capitalize_sentence_starts(input: &str) -> TransformResult<'_> {
     }
 }
 
-fn punctuation_is_sentence_boundary(input: &str, byte_index: usize, character: char) -> bool {
+/// Classify a potential sentence terminator.
+///
+/// # Arguments
+/// * `input` - Text being scanned.
+/// * `byte_index` - Byte offset of `character` in `input`.
+/// * `character` - Character at that offset.
+///
+/// # Returns
+/// True for question marks, exclamation marks, and sentence-ending periods.
+pub(super) fn punctuation_is_sentence_boundary(
+    input: &str,
+    byte_index: usize,
+    character: char,
+) -> bool {
     match character {
         '.' => period_is_sentence_boundary(input, byte_index),
         '!' | '?' => true,

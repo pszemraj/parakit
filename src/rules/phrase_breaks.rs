@@ -1,7 +1,7 @@
 //! Function-word punctuation repair and filled-pause removal.
 
 use super::engine::TransformResult;
-use super::passes::{apply_replacements, protected_token_case};
+use super::passes::{apply_replacements, protected_token_case, punctuation_is_sentence_boundary};
 
 /// Merge a period or question mark after an eligible function word.
 ///
@@ -331,12 +331,21 @@ fn continues_phrase(previous: &str, text: &str) -> bool {
 
 /// A wh-clause or relative construction can leave its preposition sentence-final.
 fn may_be_stranded(prefix: &str) -> bool {
-    let sentence = prefix.rsplit(['.', '?', '!', '\n']).next().unwrap_or("");
+    let start = prefix
+        .char_indices()
+        .rfind(|&(i, c)| {
+            c == '\n'
+                || (punctuation_is_sentence_boundary(prefix, i, c)
+                    && prefix[i + 1..]
+                        .trim_start_matches(['\'', '"', '’', '”', ')', ']', '}'])
+                        .starts_with(char::is_whitespace))
+        })
+        .map_or(0, |(i, _)| i + 1);
     regex_static!(
         r"(?i)\b(?:who|whom|whose|what|which|when|where|why|how|whether|that['’]s|the[ \t]+one)\b",
         "stranded preposition context"
     )
-    .is_match(sentence)
+    .is_match(&prefix[start..])
 }
 
 fn attached_word(input: &str, start: usize) -> bool {

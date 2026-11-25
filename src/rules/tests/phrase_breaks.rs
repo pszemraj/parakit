@@ -306,6 +306,10 @@ fn phrase_repairs_distinguish_complements_from_ambiguous_boundaries() {
                 "It is the one I came with. The rest stayed home.",
             ),
             (
+                "I know what example.com is linked to. The new address works.",
+                "I know what example.com is linked to. The new address works.",
+            ),
+            (
                 "Who called? Return to. The previous task.",
                 "Who called? Return to the previous task.",
             ),
