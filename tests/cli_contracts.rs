@@ -19,6 +19,15 @@ fn isolated_parakit(root: &Path) -> Command {
     command
 }
 
+#[cfg(unix)]
+fn isolated_runtime_dir(root: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "linux") {
+        root.join("runtime/parakit")
+    } else {
+        root.join("cache/parakit/run")
+    }
+}
+
 fn isolated_parakit_with_empty_config(name: &str) -> Command {
     let root = common::fixture_root("cli-contracts", name);
     std::fs::create_dir_all(&root).expect("fixture root should be created");
@@ -80,7 +89,7 @@ fn status_distinguishes_cli_daemon_and_unreported_versions() {
             &["--quiet", "status"],
         ] {
             let root = common::fixture_root("cli-contracts", &format!("status-version-{name}"));
-            let runtime = root.join("runtime/parakit");
+            let runtime = isolated_runtime_dir(&root);
             std::fs::create_dir_all(&runtime).unwrap();
             let listener = UnixListener::bind(runtime.join("control.sock")).unwrap();
             listener.set_nonblocking(true).unwrap();
@@ -271,8 +280,8 @@ fn broken_config_does_not_block_documented_control_and_repair_commands() {
         &["config", "init"],
         &["config", "edit"],
     ];
-    // Unix daemon endpoints are isolated under XDG_RUNTIME_DIR. The Windows
-    // named pipe is keyed directly by the user's SID and has no test-path
+    // Unix daemon endpoints use the isolated runtime or cache directory.
+    // The Windows named pipe is keyed directly by the user's SID and has no test-path
     // override, so these commands must not contact it from the test suite.
     #[cfg(unix)]
     let commands = [
@@ -523,10 +532,7 @@ fn spawn_stop_with_held_lock(
     name: &str,
 ) -> (std::path::PathBuf, std::fs::File, std::process::Child) {
     let root = common::fixture_root("cli-contracts", name);
-    #[cfg(target_os = "linux")]
-    let runtime = root.join("runtime").join("parakit");
-    #[cfg(not(target_os = "linux"))]
-    let runtime = root.join("cache").join("parakit").join("run");
+    let runtime = isolated_runtime_dir(&root);
     std::fs::create_dir_all(&runtime).unwrap();
     let lock = std::fs::OpenOptions::new()
         .create(true)
