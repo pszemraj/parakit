@@ -567,7 +567,14 @@ fn phrase_passes_survive_fillers_inside_continuation_words() {
         merge_sentence_breaks, remove_filled_pauses, remove_function_word_commas,
     };
 
-    let lefts = ["I went to the", "and", "We", "with my", "Talk to"];
+    let lefts = [
+        "I went to the",
+        "and",
+        "We",
+        "with my",
+        "Talk to",
+        "Do you want the",
+    ];
     let separators = [
         " um.", " uh?", " um,", ".", "?", ",", " um. Uh.", " um, uh.",
     ];
@@ -637,5 +644,103 @@ fn a_lone_word_after_a_filler_keeps_the_period_even_without_a_terminal() {
     assert_eq!(
         cleaner.clean_text("It works um. Thanks"),
         "It works. Thanks"
+    );
+}
+
+/// Cleans each case with the default dictation settings, which drop one final period, and
+/// checks that the output is stable.
+fn assert_messaging_cases(cases: &[(&str, &str)]) {
+    let cleaner = cleaner_messaging_default(CleaningProfile::Safe);
+    for (input, expected) in cases {
+        assert_eq!(cleaner.clean_text(input), *expected, "input {input:?}");
+        assert_eq!(
+            cleaner.clean_text(expected),
+            *expected,
+            "output {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn a_merged_question_mark_moves_to_the_end_of_a_question() {
+    assert_messaging_cases(&[
+        (
+            "Do you want tea or? Coffee. I can make some.",
+            "Do you want tea or coffee? I can make some",
+        ),
+        (
+            "Can you send me the? Report by Friday.",
+            "Can you send me the report by Friday?",
+        ),
+        ("Do you want tea or? Coffee", "Do you want tea or coffee?"),
+        ("Do you want the um? Red one.", "Do you want the red one?"),
+        ("Which is the uh? Best option.", "Which is the best option?"),
+        (
+            "Do you want the um? Uh. Red one.",
+            "Do you want the red one?",
+        ),
+        // Other openers keep dropping the mark, as rising intonation also marks statements.
+        ("I went to the? Store.", "I went to the store"),
+        ("Is it ready um? Yes it is.", "Is it ready? Yes it is"),
+    ]);
+}
+
+#[test]
+fn a_carried_question_mark_respects_where_the_sentence_ends() {
+    assert_messaging_cases(&[
+        // An existing terminal other than a period stays.
+        (
+            "Do you want the um? Red one or the blue one?",
+            "Do you want the red one or the blue one?",
+        ),
+        ("Do you want tea or? Coffee!", "Do you want tea or coffee!"),
+        (
+            "Do you want tea or? Coffee...",
+            "Do you want tea or coffee...",
+        ),
+        // A boundary that is itself merged hands the mark to the next one.
+        (
+            "Do you want tea or? Coffee and. Milk. Thanks.",
+            "Do you want tea or coffee and milk? Thanks",
+        ),
+        (
+            "Do you want the um? Red one and the? Blue one.",
+            "Do you want the red one and the blue one?",
+        ),
+        // Two marks that carry to one terminal.
+        (
+            "Is it the? Red one and. Is it the? Blue one.",
+            "Is it the red one and is it the blue one?",
+        ),
+        // Closing quotes and brackets follow the mark, and a line ends the sentence.
+        (
+            "Do you want tea or? Coffee.\" she asked.",
+            "Do you want tea or coffee?\" She asked",
+        ),
+        (
+            "Do you want tea or? Coffee.) Thanks.",
+            "Do you want tea or coffee?) Thanks",
+        ),
+        (
+            "Do you want tea or? Coffee\nThanks.",
+            "Do you want tea or coffee?\nThanks",
+        ),
+        // Dotted tokens and abbreviations are not sentence ends.
+        (
+            "Do you want the? Report from example.com or Mr. Smith. Thanks.",
+            "Do you want the report from example.com or Mr. Smith? Thanks",
+        ),
+    ]);
+}
+
+#[test]
+fn auxiliaries_still_start_a_sentence_after_a_filler() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            ("Wait um. Is it ready", "Wait. Is it ready"),
+            ("Please um. Review carefully", "Please review carefully"),
+            ("Wait um. Can you hear me", "Wait. Can you hear me"),
+        ],
     );
 }

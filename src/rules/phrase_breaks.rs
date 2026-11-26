@@ -28,19 +28,25 @@ const PREPOSITIONS: &[&str] = &["to", "of", "into", "from", "with", "for", "with
 const WH_WORDS: &[&str] = &[
     "who", "whom", "whose", "which", "what", "when", "where", "why", "how",
 ];
-/// Other function words: pronouns, demonstratives, quantifiers, auxiliaries,
-/// conjunctions, and prepositions. One after an unfinished phrase starts something new.
+/// Start a question when first in a sentence, and otherwise start something new.
+const AUXILIARIES: &[&str] = &[
+    "am", "is", "are", "was", "were", "do", "does", "did", "have", "has", "had", "can", "could",
+    "will", "would", "shall", "should", "may", "might", "must",
+];
+/// Other function words: pronouns, demonstratives, quantifiers, conjunctions, and
+/// prepositions. One after an unfinished phrase starts something new.
 const RESTARTS: &[&str] = &[
     "you", "it", "me", "him", "her", "us", "them", "this", "that", "these", "those", "there",
     "here", "some", "any", "all", "each", "every", "either", "neither", "both", "none", "few",
-    "many", "most", "much", "several", "am", "is", "are", "was", "were", "have", "has", "had",
-    "do", "does", "did", "can", "could", "will", "would", "shall", "should", "may", "might",
-    "must", "not", "so", "nor", "yet", "while", "until", "since", "than", "as", "like", "in", "on",
-    "at", "by", "after", "before", "about", "through", "during", "between", "over", "under",
-    "versus",
+    "many", "most", "much", "several", "not", "so", "nor", "yet", "while", "until", "since",
+    "than", "as", "like", "in", "on", "at", "by", "after", "before", "about", "through", "during",
+    "between", "over", "under", "versus",
 ];
 
 /// Merge periods and question marks inside a phrase or relative clause.
+///
+/// A question mark that a merge removes moves to the end of the merged sentence when
+/// that sentence opens as a question.
 ///
 /// # Returns
 /// The repaired text and number of boundaries removed.
@@ -71,9 +77,14 @@ pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
         }
         let (word_end, next) = continuation(input, end)?;
         let gap = &input[mark.end()..end];
-        Some((mark.start(), word_end, format!("{gap}{next}")))
+        Some(Edit {
+            start: mark.start(),
+            end: word_end,
+            text: format!("{gap}{next}"),
+            carry: mark.as_str() == "?" && opens_question(left),
+        })
     });
-    apply_replacements(input, edits)
+    apply_edits(input, edits.collect())
 }
 
 /// Remove commas inside a phrase unless another soon closes an aside.
@@ -132,13 +143,14 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
         "filled-pause pattern"
     );
     let mut matches = re.captures_iter(input).peekable();
-    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut edits: Vec<Edit> = Vec::new();
     let mut pending_terminal: Option<&str> = None;
     let mut left = "";
     let mut chain_end = None;
     while let Some(captures) = matches.next() {
         let whole = captures.get(0).unwrap();
         let mut end = whole.end();
+        let mut carry = false;
         let mut replacement = format!("{} ", captures.get(1).map_or("", |m| m.as_str()));
         let terminal = captures.name("terminal").map(|m| m.as_str());
         // A chain such as "um? Uh." carries its context and question to the next real word.
@@ -176,23 +188,98 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
                 replacement.push_str(&input[end..next_start]);
                 replacement.push_str(&next);
                 end = word_end;
+                carry = terminal.contains('?') && opens_question(left);
             } else {
                 // The kept mark follows the word before the chain, so the spaces that
                 // earlier fillers of the chain left would only detach it.
                 let mut boundary = whole.start();
                 for earlier in edits.iter_mut().rev() {
-                    if earlier.1 != boundary || !earlier.2.trim().is_empty() {
+                    if earlier.end != boundary || !earlier.text.trim().is_empty() {
                         break;
                     }
-                    earlier.2.clear();
-                    boundary = earlier.0;
+                    earlier.text.clear();
+                    boundary = earlier.start;
                 }
                 replacement = format!("{terminal} ");
             }
         }
-        edits.push((whole.start(), end, replacement));
+        edits.push(Edit {
+            start: whole.start(),
+            end,
+            text: replacement,
+            carry,
+        });
     }
-    apply_replacements(input, edits)
+    apply_edits(input, edits)
+}
+
+/// A replacement of `start..end`. With `carry`, the replacement ends a merge that removed
+/// a question mark, which moves to the end of the sentence the merge builds.
+struct Edit {
+    start: usize,
+    end: usize,
+    text: String,
+    carry: bool,
+}
+
+/// Apply ordered, non-overlapping edits, then carry the question marks they removed.
+fn apply_edits(input: &str, edits: Vec<Edit>) -> TransformResult<'_> {
+    let mut carries = Vec::new();
+    let mut shift = 0isize;
+    for edit in &edits {
+        let start = edit.start.checked_add_signed(shift).unwrap();
+        if edit.carry {
+            carries.push(start + edit.text.len());
+        }
+        shift += edit.text.len() as isize - (edit.end - edit.start) as isize;
+    }
+    let mut result = apply_replacements(
+        input,
+        edits
+            .iter()
+            .map(|edit| (edit.start, edit.end, edit.text.as_str())),
+    );
+    if !carries.is_empty() {
+        let text = result.text.to_mut();
+        // Later marks first: an appended mark never moves an earlier offset.
+        for &from in carries.iter().rev() {
+            carry_question(text, from);
+        }
+    }
+    result
+}
+
+/// Turn the period that ends the sentence at `from` into a question mark. A sentence that
+/// ends in `?` or `!`, or in an ellipsis, stays; one without a terminal gets `?`.
+fn carry_question(text: &mut String, from: usize) {
+    let ends = |rest: &str| {
+        let rest = rest.trim_start_matches(['\'', '"', '’', '”', ')', ']', '}']);
+        rest.is_empty() || rest.starts_with(char::is_whitespace)
+    };
+    for (i, c) in text[from..].char_indices().map(|(i, c)| (from + i, c)) {
+        if c == '\n' {
+            let at = from + text[from..i].trim_end().len();
+            text.insert(at, '?');
+            return;
+        }
+        if matches!(c, '.' | '?' | '!')
+            && punctuation_is_sentence_boundary(text, i, c)
+            && ends(&text[i + 1..])
+        {
+            if c == '.' && !text[..i].ends_with('.') {
+                text.replace_range(i..=i, "?");
+            }
+            return;
+        }
+    }
+    let at = from + text[from..].trim_end().len();
+    text.insert(at, '?');
+}
+
+/// Whether the sentence that `left` begins opens with an auxiliary or a wh-word.
+fn opens_question(left: &str) -> bool {
+    let opener = first_word(left.trim_start_matches(|c: char| !c.is_alphabetic()));
+    is_any(opener, AUXILIARIES) || is_any(opener, WH_WORDS)
 }
 
 fn first_word(text: &str) -> &str {
@@ -282,6 +369,7 @@ fn continues_phrase(text: &str) -> bool {
             SUBJECTS,
             PREPOSITIONS,
             WH_WORDS,
+            AUXILIARIES,
             RESTARTS,
         ]
         .iter()
