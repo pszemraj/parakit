@@ -615,3 +615,27 @@ fn phrase_passes_survive_fillers_inside_continuation_words() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn a_lone_word_after_a_filler_keeps_the_period_even_without_a_terminal() {
+    let cases = [
+        ("It works um. Thanks", "It works. Thanks"),
+        ("It works um. Thanks.", "It works. Thanks."),
+        ("Thanks um. Bye.", "Thanks. Bye."),
+        ("Thanks um. Bye", "Thanks. Bye"),
+        ("Please um. Review carefully", "Please review carefully"),
+        ("Please um. Review carefully.", "Please review carefully."),
+        // A determiner still takes a lone word.
+        ("In my um. Config", "In my config"),
+    ];
+    assert_clean_cases(CleaningProfile::Safe, &cases);
+    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
+    for (_, expected) in cases {
+        assert_eq!(cleaner.clean_text(expected), expected);
+    }
+    let cleaner = cleaner_messaging_default(CleaningProfile::Safe);
+    assert_eq!(
+        cleaner.clean_text("It works um. Thanks"),
+        "It works. Thanks"
+    );
+}

@@ -289,12 +289,14 @@ fn continues_phrase(text: &str) -> bool {
 }
 
 /// Whether `text` resumes a paused phrase rather than starting a sentence. A lone word,
-/// a contraction such as `Let's`, or a clause shape such as `Set a goal` starts one.
+/// whether it ends its sentence or the text, a contraction such as `Let's`, or a clause
+/// shape such as `Set a goal` starts one.
 fn resumes(text: &str) -> bool {
     let mut tokens = text.split_whitespace();
     let first = tokens.next().unwrap_or("");
     let second = tokens.next().unwrap_or("");
     continues_phrase(text)
+        && !second.is_empty()
         && !first.ends_with(['.', '?', '!'])
         && !first.contains(['\'', '’'])
         && !subject(second)
