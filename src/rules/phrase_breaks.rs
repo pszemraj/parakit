@@ -132,7 +132,7 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
         "filled-pause pattern"
     );
     let mut matches = re.captures_iter(input).peekable();
-    let mut edits = Vec::new();
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
     let mut pending_terminal: Option<&str> = None;
     let mut left = "";
     let mut chain_end = None;
@@ -160,16 +160,33 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
                 .is_some_and(|next| next.get(0).unwrap().start() <= next_start)
             {
                 pending_terminal = Some(terminal);
-            } else if let Some((word_end, next)) = continuation(input, next_start).filter(|_| {
-                let right = &input[next_start..];
-                joins(left, terminal, right)
-                    || (is_any(last_word(left), WH_WORDS) && subject(right))
-                    || (!terminal.contains(['?', '!']) && resumes(right))
-            }) {
+            } else if let Some((word_end, next)) =
+                continuation(input, next_start).filter(|&(word_end, _)| {
+                    // The word can embed a filler (`Store-um`); an edit must not reach into it.
+                    let clear = matches
+                        .peek()
+                        .is_none_or(|next| next.get(0).unwrap().start() >= word_end);
+                    let right = &input[next_start..];
+                    clear
+                        && (joins(left, terminal, right)
+                            || (is_any(last_word(left), WH_WORDS) && subject(right))
+                            || (!terminal.contains(['?', '!']) && resumes(right)))
+                })
+            {
                 replacement.push_str(&input[end..next_start]);
                 replacement.push_str(&next);
                 end = word_end;
             } else {
+                // The kept mark follows the word before the chain, so the spaces that
+                // earlier fillers of the chain left would only detach it.
+                let mut boundary = whole.start();
+                for earlier in edits.iter_mut().rev() {
+                    if earlier.1 != boundary || !earlier.2.trim().is_empty() {
+                        break;
+                    }
+                    earlier.2.clear();
+                    boundary = earlier.0;
+                }
                 replacement = format!("{terminal} ");
             }
         }

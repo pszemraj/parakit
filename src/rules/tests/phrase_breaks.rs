@@ -542,3 +542,76 @@ fn function_word_commas_need_an_unfinished_phrase() {
         ],
     );
 }
+
+#[test]
+fn filler_terminals_stay_when_the_next_word_embeds_a_filler() {
+    // The continuation word can hold a filler (`Store-um`), so merging into it would
+    // reach into the next filler match.
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            (
+                "I went to the um. Store-um thing.",
+                "I went to the store- thing.",
+            ),
+            ("and uh? Path/uh/file.", "And path/ /file."),
+            ("with my um. Foo.um bar.", "With my foo. Bar."),
+            ("Talk to um, uh. Self-erm test.", "Talk to. Self- test."),
+        ],
+    );
+}
+
+#[test]
+fn phrase_passes_survive_fillers_inside_continuation_words() {
+    use crate::rules::phrase_breaks::{
+        merge_sentence_breaks, remove_filled_pauses, remove_function_word_commas,
+    };
+
+    let lefts = ["I went to the", "and", "We", "with my", "Talk to"];
+    let separators = [
+        " um.", " uh?", " um,", ".", "?", ",", " um. Uh.", " um, uh.",
+    ];
+    let rights = [
+        "Store-um thing.",
+        "Path/uh/file.",
+        "Foo.um bar.",
+        "X-um",
+        "API-um docs.",
+        "I'm-uh fine.",
+        "Uh-huh, yes.",
+    ];
+    let cleaners = [
+        cleaner_keep_period(CleaningProfile::Safe),
+        cleaner_messaging_default(CleaningProfile::Safe),
+    ];
+    let mut failures = Vec::new();
+    for left in lefts {
+        for separator in separators {
+            for right in rights {
+                let input = format!("{left}{separator} {right}");
+                // The passes run directly: `Cleaner::clean` fails open on a panic.
+                let filled = remove_filled_pauses(&input).text.into_owned();
+                let merged = merge_sentence_breaks(&input).text.into_owned();
+                let commas = remove_function_word_commas(&input).text.into_owned();
+                let chained = {
+                    let filled = remove_filled_pauses(&input).text.into_owned();
+                    let merged = merge_sentence_breaks(&filled).text.into_owned();
+                    remove_function_word_commas(&merged).text.into_owned()
+                };
+                for cleaner in &cleaners {
+                    for text in [&input, &filled, &merged, &commas, &chained] {
+                        let once = cleaner.clean(text);
+                        let twice = cleaner.clean(&once.text);
+                        if once.failure.is_some() || twice.text != once.text {
+                            failures.push(format!(
+                                "{text:?}: {:?} then {:?} ({:?})",
+                                once.text, twice.text, once.failure
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

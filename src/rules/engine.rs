@@ -14,6 +14,7 @@ use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
+use std::panic::AssertUnwindSafe;
 
 use super::defaults::DEFAULT_RULES;
 use super::numbers::NumberKind;
@@ -455,7 +456,8 @@ impl Cleaner {
     ///
     /// # Panics
     ///
-    /// Does not panic; passes are applied in their compiled order.
+    /// Passes are applied in their compiled order and do not panic on valid
+    /// UTF-8; [`Cleaner::clean`] still catches a panic from a pass bug.
     pub fn try_clean(&self, input: &str) -> Result<CleanResult> {
         let mut text = Cow::Borrowed(input);
         let mut rules_fired = Vec::new();
@@ -517,12 +519,12 @@ impl Cleaner {
 
     /// Apply every enabled pass, failing open to the original transcript.
     ///
-    /// If a bounded `fancy-regex` pass hits its runtime backtrack limit,
-    /// this returns the original `input` unchanged (never a
+    /// If a bounded `fancy-regex` pass hits its runtime backtrack limit, or a
+    /// pass panics, this returns the original `input` unchanged (never a
     /// partially-transformed string) with [`CleanResult::failure`] set to a
-    /// description of the error. This method never panics; it is the
-    /// preferred entry point for production paths such as the daemon
-    /// worker thread, where a panic would take down the worker.
+    /// description of the error or the panic message. This method never
+    /// panics; it is the preferred entry point for production paths such as
+    /// the daemon worker thread, where a panic would take down the worker.
     ///
     /// # Returns
     ///
@@ -533,18 +535,29 @@ impl Cleaner {
     /// # Errors
     ///
     /// This method is infallible: it returns `CleanResult`, not `Result`,
-    /// and never propagates an `Err`. A cleaning-pass failure is caught
-    /// internally and surfaced through [`CleanResult::failure`] instead of
-    /// as a `Result::Err`.
+    /// and never propagates an `Err`. A cleaning-pass failure or panic is
+    /// caught internally and surfaced through [`CleanResult::failure`]
+    /// instead of as a `Result::Err`.
     #[must_use]
     pub fn clean(&self, input: &str) -> CleanResult {
-        match self.try_clean(input) {
-            Ok(result) => result,
-            Err(err) => CleanResult {
-                text: input.to_string(),
-                rules_fired: Vec::new(),
-                failure: Some(format!("{err:#}")),
-            },
+        let failure = match std::panic::catch_unwind(AssertUnwindSafe(|| self.try_clean(input))) {
+            Ok(Ok(result)) => return result,
+            Ok(Err(err)) => format!("{err:#}"),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+                match message {
+                    Some(message) => format!("cleaning pass panicked: {message}"),
+                    None => "cleaning pass panicked".to_string(),
+                }
+            }
+        };
+        CleanResult {
+            text: input.to_string(),
+            rules_fired: Vec::new(),
+            failure: Some(failure),
         }
     }
 
@@ -918,6 +931,55 @@ mod rule_application_tests {
             let changed = rule.apply(input).unwrap();
             assert_eq!(changed.text, "a$ b$");
             assert_eq!(changed.matches, 2);
+        }
+    }
+
+    fn panic_with_str(_: &str) -> TransformResult<'_> {
+        panic!("static message")
+    }
+
+    fn panic_with_string(_: &str) -> TransformResult<'_> {
+        panic!("{} message", "formatted")
+    }
+
+    fn panic_without_text(_: &str) -> TransformResult<'_> {
+        std::panic::panic_any(7_u32)
+    }
+
+    #[test]
+    fn clean_fails_open_when_a_pass_panics() {
+        let cases: [(fn(&str) -> TransformResult<'_>, &str); 3] = [
+            (panic_with_str, "cleaning pass panicked: static message"),
+            (
+                panic_with_string,
+                "cleaning pass panicked: formatted message",
+            ),
+            (panic_without_text, "cleaning pass panicked"),
+        ];
+        for (transform, failure) in cases {
+            let mut cleaner = Cleaner::new_prevalidated(
+                CleaningProfile::Safe,
+                false,
+                None,
+                &[],
+                &HashSet::new(),
+                &[],
+            )
+            .unwrap();
+            cleaner.rules.insert(
+                0,
+                CompiledRule {
+                    name: "panics".to_string(),
+                    position: None,
+                    transform: CompiledTransform::Procedural(transform),
+                },
+            );
+            cleaner.word_replacement_start += 1;
+
+            let result = cleaner.clean("so um the thing");
+            assert_eq!(result.text, "so um the thing");
+            assert!(result.rules_fired.is_empty());
+            assert_eq!(result.failure.as_deref(), Some(failure));
         }
     }
 }
