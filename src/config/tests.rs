@@ -63,7 +63,7 @@ fn invalid_word_replacements_fail_load_even_when_cleaning_is_disabled() {
         (
             "case-duplicate",
             "quan = 'Qwen'\nQUAN = 'Other'",
-            "duplicate user rule name",
+            "replacements keys \"QUAN\" and \"quan\" differ only in case; keep one",
         ),
     ] {
         let path = write_fixture(

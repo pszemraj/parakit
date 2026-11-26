@@ -15,13 +15,13 @@
 //! `show` (the default subcommand) loads and validates the file and so
 //! fails with a diagnostic naming the config path.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use parakit::inference::DeviceMode;
 use parakit::model::{ModelPreset, ModelQuantization};
 use parakit::qwen::QwenOptions;
 use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -97,8 +97,16 @@ impl ConfigFile {
     /// User rules followed by word corrections, which apply together after all other cleaning.
     ///
     /// # Errors
-    /// Returns an error when a replacement key is not one nonempty word or its replacement is blank.
+    /// Returns an error when a replacement key is not one nonempty word, its replacement is blank,
+    /// or two keys differ only in case.
     pub(crate) fn effective_user_rules(&self) -> Result<Vec<UserRule>> {
+        // Generated rule names are lowercase, so such keys would share one name.
+        let mut lowered: HashMap<String, &str> = HashMap::new();
+        for source in self.replacements.keys() {
+            if let Some(other) = lowered.insert(source.to_lowercase(), source) {
+                bail!("replacements keys {other:?} and {source:?} differ only in case; keep one");
+            }
+        }
         let mut rules = self.rules.user.clone();
         for (source, target) in &self.replacements {
             rules.push(UserRule::word_replacement(
