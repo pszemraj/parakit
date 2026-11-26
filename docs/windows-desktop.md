@@ -14,6 +14,8 @@ Parakit registers the fixed `Ctrl+Space` chord through Win32's `RegisterHotKey`.
 
 If dictation does not start when you hold the chord, check your IME for a conflicting input-mode shortcut.
 
+Windows has a single hotkey backend, so the Linux-only `--hotkey-backend` and `--insertion-backend` flags are not accepted.
+
 ## Insertion
 
 Parakit checks the foreground window before sending input with `SendInput`. If the target cannot be captured or verified, automatic insertion is skipped. Run the target app at the same privilege level as Parakit so Windows permits input delivery. See the [clipboard staging policy](running.md#clipboard-staging-and-restore).

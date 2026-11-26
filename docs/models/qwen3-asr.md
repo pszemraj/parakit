@@ -54,7 +54,7 @@ In an evaluation of the 1.7B model, same-conversation context left the word erro
 
 Inspect which context was used through [inference diagnostics](../logging.md#transcription-record-fields).
 
-If another application owns the optional shortcut, parakit warns and keeps the original shortcut usable. Follow the [context troubleshooting steps](../troubleshooting.md#qwen-context-has-no-effect) if the shortcut has no effect.
+The extra shortcut is inactive for other models. If another application owns the optional shortcut, parakit warns and keeps the original shortcut usable. Follow the [context troubleshooting steps](../troubleshooting.md#qwen-context-has-no-effect) if the shortcut has no effect.
 
 ## Long Audio And Inference
 

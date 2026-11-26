@@ -67,7 +67,7 @@ export PARAKIT_CUDA_ARCHS=120-real
 cargo build --locked --features cuda,vulkan --bin parakit --bin parakit-ibus --example transcribe-file
 ```
 
-Set the architecture for your GPU and reuse the same profile, feature set, and native settings in each target directory to avoid recompiling C/C++. Substitute the isolated executable when checking [runtime library paths](#runtime-library-paths). See [Linux GPU validation](dev/quality.md#linux-cudavulkan) for isolated runtime state.
+Set the architecture for your GPU and reuse the same profile, feature set, and native settings in each target directory to avoid recompiling C/C++. An existing directory built with `--all-features` should keep that feature set when rebuilding. On a non-Apple target, a multi-backend build such as `--all-features` ignores the `metal` feature and prints `ignoring unsupported metal feature on non-Apple target during multi-backend build`; this is intentional. Substitute the isolated executable when checking [runtime library paths](#runtime-library-paths). See [Linux GPU validation](dev/quality.md#linux-cudavulkan) for isolated runtime state.
 
 ## CPU Builds
 

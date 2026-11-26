@@ -175,7 +175,7 @@ parakit start --model-preset qwen3-asr-1.7b --quantize q6_k --device gpu
 
 To prepare Q6_K, put a compatible `crispasr-quantize` on `PATH` (`crispasr-quantize.exe` on Windows). Preparation uses the provider revision's F16 GGUF and prints a notice even in quiet mode. It reuses a user-fetched F16 or downloads its own intermediate, removing that file on success and retaining it on failure for retry. `fetch --force` rebuilds Q6_K from a fresh intermediate and preserves user-fetched F16 files. Cached Q6_K can start offline.
 
-Qwen Q6_K retains a Q8_0-or-higher audio encoder. Parakeet quantizes eligible encoder and decoder matrices to Q6_K. Unsupported tensors keep higher precision. The WAV helper accepts the same precision flag with a preset. For original checkpoints, use the separate [source rebuild workflow](dev/README.md#source-rebuild), which produces Q8_0.
+Qwen Q6_K retains a Q8_0-or-higher audio encoder. Parakeet quantizes eligible encoder and decoder matrices to Q6_K. Unsupported tensors keep higher precision. The WAV helper accepts the same precision flag with a preset. For original checkpoints, use the separate [source rebuild workflow](dev/README.md#source-rebuild), which produces Q8_0. `fetch --quantize q6_k` conflicts with `--from-source`, a custom source, `--file`, and `--sha256`.
 
 During interactive download, the transfer display shows speed and ETA when size is known, or bytes transferred when it is unknown. Quiet mode and redirected stderr hide the progress bar. Quantization is announced separately. Use `--verbose` for source URLs and native converter output.
 

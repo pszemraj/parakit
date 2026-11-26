@@ -42,7 +42,7 @@ In `direct` mode the suppressed tap only checks for a Unicode key-down, with no 
 
 ## Hotkey
 
-Hold `Left Control+Space` while speaking, then release Control or Space to transcribe. The event tap suppresses Space for active dictation shortcuts and passes through other chords such as `Command+Space` for Spotlight. See [Qwen context shortcuts](models/qwen3-asr.md#prior-dictation-context).
+Hold `Left Control+Space` while speaking, then release Control or Space to transcribe. The event tap suppresses Space for active dictation shortcuts and passes through other chords such as `Command+Space` for Spotlight. The Qwen context chord also passes through with non-Qwen models. The Linux-only `--hotkey-backend` and `--insertion-backend` flags are not accepted. See [Qwen context shortcuts](models/qwen3-asr.md#prior-dictation-context).
 
 If the shortcut opens the input-source switcher or Parakit does not respond, check for a conflict.
 

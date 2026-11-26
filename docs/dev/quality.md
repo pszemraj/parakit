@@ -174,7 +174,7 @@ Set `model` and `wav` to your local fixture paths. The WAV goes through the shar
 
 Simulation bypasses the daemon singleton and control endpoint and leaves an existing daemon running. Avoid concurrent inference when measuring timings.
 
-Add `--model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61` to test idle reload. The worker acknowledges every dictation, and simulation verifies residency after each wait, including the final one. The immediate simulated release exercises queuing during reload. With history enabled and context disabled, transcripts must match across cycles on the same worker. Missing transcripts, reload failures, and missed offloads return a failure status. Use `--model-idle-minutes 0` to check that the session remains loaded.
+Add `--model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61` to test idle reload. Both simulate flags require `--simulate-ptt-audio`. The worker acknowledges every dictation, and simulation verifies residency after each wait, including the final one. The immediate simulated release exercises queuing during reload. With history enabled and context disabled, transcripts must match across cycles on the same worker. Missing transcripts, reload failures, and missed offloads return a failure status. Use `--model-idle-minutes 0` to check that the session remains loaded.
 
 Simulation requests the original shortcut's mode. To compare Qwen context, set `context_on_default_hotkey = true` under `[qwen]` in the isolated configuration, with nonzero `context_dictations` and `daemon.transcript_history`; the first successful capture supplies history for later captures. Keep context disabled for ordinary reload-parity checks.
 
