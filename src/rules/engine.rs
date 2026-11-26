@@ -948,7 +948,8 @@ mod rule_application_tests {
 
     #[test]
     fn clean_fails_open_when_a_pass_panics() {
-        let cases: [(fn(&str) -> TransformResult<'_>, &str); 3] = [
+        type Pass = for<'a> fn(&'a str) -> TransformResult<'a>;
+        let cases: [(Pass, &str); 3] = [
             (panic_with_str, "cleaning pass panicked: static message"),
             (
                 panic_with_string,
