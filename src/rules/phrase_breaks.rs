@@ -60,6 +60,9 @@ const RESTARTS: &[&str] = &[
     "between", "over", "under", "versus",
 ];
 
+/// Titles that precede a name, so the period after one never ends a sentence (`Dr. Who`).
+const HONORIFICS: &[&str] = &["mr", "mrs", "ms", "dr", "prof"];
+
 /// Closing quotes and brackets, which can follow the terminal that ends a sentence.
 const CLOSERS: [char; 7] = ['\'', '"', '’', '”', ')', ']', '}'];
 
@@ -316,6 +319,10 @@ fn carry_question(text: &mut String, from: usize) {
         .find(|&(i, c)| ends_sentence(text, i, c));
     match end {
         Some((i, '\n')) => text.insert(insert_at(text, i), '?'),
+        // The period of an abbreviation stays, and the mark follows it.
+        Some((i, '.')) if !punctuation_is_sentence_boundary(text, i, '.') => {
+            text.insert(i + 1, '?');
+        }
         // The last dot of an ASCII ellipsis follows another dot and stays.
         Some((i, '.')) if !text[..i].ends_with('.') => text.replace_range(i..=i, "?"),
         Some(_) => {}
@@ -491,18 +498,28 @@ fn closes_aside(text: &str, from: usize) -> bool {
 
 /// Whether the character `c` at byte `i` of `text` ends a sentence: a line break, or a
 /// terminal that is a sentence boundary, or an ellipsis character (`…`), and that is
-/// followed, past any closing quotes or brackets, by whitespace or the end of `text`. The
-/// scan before a mark and the scan after it both use this rule, so a run of `...` and a
-/// single `…` end a sentence alike.
+/// followed, past any closing quotes or brackets, by whitespace or the end of `text`. A
+/// period after an abbreviation (`5 p.m.`) is no boundary, but it ends the sentence when a
+/// capitalized function word follows (`5 p.m. I can wait`); `Mr. Smith` and `Dr. Who` go
+/// on. The scan before a mark and the scan after it both use this rule, so a run of `...`
+/// and a single `…` end a sentence alike.
 fn ends_sentence(text: &str, i: usize, c: char) -> bool {
     if c == '\n' {
         return true;
     }
-    if c != '…' && !punctuation_is_sentence_boundary(text, i, c) {
+    let boundary = c == '…' || punctuation_is_sentence_boundary(text, i, c);
+    if !boundary && c != '.' {
         return false;
     }
     let rest = text[i + c.len_utf8()..].trim_start_matches(CLOSERS);
-    rest.is_empty() || rest.starts_with(char::is_whitespace)
+    if boundary {
+        return rest.is_empty() || rest.starts_with(char::is_whitespace);
+    }
+    let word = first_word(rest.trim_start());
+    rest.starts_with(char::is_whitespace)
+        && word.starts_with(char::is_uppercase)
+        && in_closed_class(word)
+        && !is_any(last_word(&text[..i]), HONORIFICS)
 }
 
 /// The text after the last sentence boundary.
@@ -563,18 +580,23 @@ fn continues_phrase(text: &str) -> bool {
     !word.is_empty()
         && !token.ends_with(',')
         && !contraction.is_match(token)
-        && ![
-            COORDINATORS,
-            SUBORDINATORS,
-            DETERMINERS,
-            SUBJECTS,
-            PREPOSITIONS,
-            WH_WORDS,
-            AUXILIARIES,
-            RESTARTS,
-        ]
-        .iter()
-        .any(|class| in_class(word, class))
+        && !in_closed_class(word)
+}
+
+/// Whether `word` is a function word of any class above, and so does not continue a phrase.
+fn in_closed_class(word: &str) -> bool {
+    [
+        COORDINATORS,
+        SUBORDINATORS,
+        DETERMINERS,
+        SUBJECTS,
+        PREPOSITIONS,
+        WH_WORDS,
+        AUXILIARIES,
+        RESTARTS,
+    ]
+    .iter()
+    .any(|class| in_class(word, class))
 }
 
 /// Whether `text` resumes a paused phrase rather than starting a sentence. A lone word,
