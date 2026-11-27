@@ -679,9 +679,36 @@ fn a_merged_question_mark_moves_to_the_end_of_a_question() {
             "Do you want the um? Uh. Red one.",
             "Do you want the red one?",
         ),
+        // A wh-word followed by an auxiliary or a contraction opens an inverted question.
+        ("What is the? Plan.", "What is the plan?"),
+        ("What's the? Plan.", "What's the plan?"),
+        ("What\u{2019}s the? Plan.", "What\u{2019}s the plan?"),
+        ("Where's the? Remote.", "Where's the remote?"),
+        ("Where did the? Cable go.", "Where did the cable go?"),
+        ("How do we fix the? Parser.", "How do we fix the parser?"),
         // Other openers keep dropping the mark, as rising intonation also marks statements.
         ("I went to the? Store.", "I went to the store"),
         ("Is it ready um? Yes it is.", "Is it ready? Yes it is"),
+    ]);
+}
+
+#[test]
+fn a_wh_word_that_opens_a_statement_does_not_carry_the_mark() {
+    assert_messaging_cases(&[
+        (
+            "What I need is the um? Red one. Then we go.",
+            "What I need is the red one. Then we go",
+        ),
+        (
+            "How we did it was with the? Old script.",
+            "How we did it was with the old script",
+        ),
+        (
+            "Where it broke is in the? Parser module, I think.",
+            "Where it broke is in the parser module, I think",
+        ),
+        // A subject question has no auxiliary after the wh-word, so it drops the mark.
+        ("Who broke the? Build.", "Who broke the build"),
     ]);
 }
 

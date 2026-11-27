@@ -276,10 +276,28 @@ fn carry_question(text: &mut String, from: usize) {
     text.insert(at, '?');
 }
 
-/// Whether the sentence that `left` begins opens with an auxiliary or a wh-word.
+/// Whether the sentence that `left` begins opens as an inverted question: an auxiliary
+/// (`Do you`), a wh-word followed by an auxiliary (`Where did`), or a wh-word with an
+/// attached `'s`, `'re`, `'ll`, or `'d` (`What's`). A wh-word also opens statements such
+/// as `What I need is`, so any other wh-word does not count.
 fn opens_question(left: &str) -> bool {
-    let opener = first_word(left.trim_start_matches(|c: char| !c.is_alphabetic()));
-    is_any(opener, AUXILIARIES) || is_any(opener, WH_WORDS)
+    let text = left.trim_start_matches(|c: char| !c.is_alphabetic());
+    let opener = first_word(text);
+    if is_any(opener, AUXILIARIES) {
+        return true;
+    }
+    if !is_any(opener, WH_WORDS) {
+        return false;
+    }
+    let rest = &text[opener.len()..];
+    let contraction = rest
+        .strip_prefix(['\'', '’'])
+        .is_some_and(|suffix| is_any(first_word(suffix), &["s", "re", "ll", "d"]));
+    contraction
+        || is_any(
+            first_word(rest.trim_start_matches(char::is_whitespace)),
+            AUXILIARIES,
+        )
 }
 
 fn first_word(text: &str) -> &str {
