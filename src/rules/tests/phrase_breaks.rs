@@ -465,6 +465,43 @@ fn sentence_merges_keep_stranded_prepositions() {
 }
 
 #[test]
+fn all_caps_tokens_are_abbreviations_not_function_words() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // An abbreviation that spells a function word never leaves a sentence open.
+            (
+                "We moved to Portland, OR. The new job starts Monday.",
+                "We moved to Portland, OR. The new job starts Monday.",
+            ),
+            (
+                "She was born in Kuala Lumpur, MY. Flights leave daily.",
+                "She was born in Kuala Lumpur, MY. Flights leave daily.",
+            ),
+            (
+                "We flew to the US. Then we drove.",
+                "We flew to the US. Then we drove.",
+            ),
+            ("Check WHO um. It can do.", "Check WHO. It can do."),
+            // Nor does one start a new sentence after an unfinished phrase.
+            ("Talk to the. IT team today.", "Talk to the IT team today."),
+            ("Talk to the, IT team today.", "Talk to the IT team today."),
+            ("Hand me the. AM radio.", "Hand me the AM radio."),
+            ("Fly from. WHO headquarters.", "Fly from WHO headquarters."),
+            ("Please um. Review IT budgets.", "Please review IT budgets."),
+            // The same words in ordinary case keep working.
+            (
+                "Take the bus or. Not the train.",
+                "Take the bus or not the train.",
+            ),
+            ("Hand me the. Am I late.", "Hand me the. Am I late."),
+            ("Fly from. Who knows where.", "Fly from. Who knows where."),
+            ("Talk to the. It team today.", "Talk to the. It team today."),
+        ],
+    );
+}
+
+#[test]
 fn only_an_open_relative_clause_merges_across_a_period() {
     assert_clean_cases(
         CleaningProfile::Safe,

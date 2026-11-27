@@ -3,6 +3,7 @@
 //! A mark is removed only when function words show that its sentence continues.
 //! The word lists are closed grammatical classes; where they leave a mark
 //! undecided, as with any pair of open-class words, the mark stays.
+//! A token in all capitals (`OR`, `IT`, `US`) is an abbreviation, never a function word.
 
 use std::borrow::Cow;
 
@@ -69,7 +70,7 @@ pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
             // A single letter can be a label, and a pronoun can end an inverted question.
             mark => {
                 let word = last_word(left);
-                word.len() > 1 && !is_any(word, SUBJECTS) && joins(left, mark, right)
+                word.len() > 1 && !in_class(word, SUBJECTS) && joins(left, mark, right)
             }
         };
         if !merge {
@@ -113,8 +114,8 @@ pub(super) fn remove_function_word_commas(input: &str) -> TransformResult<'_> {
         let right = &text[captures.get(0).unwrap().end()..];
         // Conjunctions often open a clause with an aside. A subordinator that does not
         // start its sentence still joins a clause that starts with a pronoun.
-        let opener = is_any(word, COORDINATORS)
-            || (is_any(word, SUBORDINATORS) && (left.trim() == word || !subject(right)));
+        let opener = in_class(word, COORDINATORS)
+            || (in_class(word, SUBORDINATORS) && (left.trim() == word || !subject(right)));
         let aside = right
             .split_whitespace()
             .take(2)
@@ -181,7 +182,7 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
                     let right = &input[next_start..];
                     clear
                         && (joins(left, terminal, right)
-                            || (is_any(last_word(left), WH_WORDS) && subject(right))
+                            || (in_class(last_word(left), WH_WORDS) && subject(right))
                             || (!terminal.contains(['?', '!']) && resumes(right)))
                 })
             {
@@ -283,18 +284,18 @@ fn carry_question(text: &mut String, from: usize) {
 fn opens_question(left: &str) -> bool {
     let text = left.trim_start_matches(|c: char| !c.is_alphabetic());
     let opener = first_word(text);
-    if is_any(opener, AUXILIARIES) {
+    if in_class(opener, AUXILIARIES) {
         return true;
     }
-    if !is_any(opener, WH_WORDS) {
+    if !in_class(opener, WH_WORDS) {
         return false;
     }
     let rest = &text[opener.len()..];
     let contraction = rest
         .strip_prefix(['\'', '’'])
-        .is_some_and(|suffix| is_any(first_word(suffix), &["s", "re", "ll", "d"]));
+        .is_some_and(|suffix| in_class(first_word(suffix), &["s", "re", "ll", "d"]));
     contraction
-        || is_any(
+        || in_class(
             first_word(rest.trim_start_matches(char::is_whitespace)),
             AUXILIARIES,
         )
@@ -341,22 +342,22 @@ fn joins(left: &str, mark: &str, right: &str) -> bool {
     if word == "A" {
         return false; // A label or grade.
     }
-    if is_any(next, COORDINATORS) {
+    if in_class(next, COORDINATORS) {
         return next.eq_ignore_ascii_case(word);
     }
-    if is_any(word, COORDINATORS) || is_any(word, SUBORDINATORS) {
+    if in_class(word, COORDINATORS) || in_class(word, SUBORDINATORS) {
         return true;
     }
-    if is_any(word, DETERMINERS) {
+    if in_class(word, DETERMINERS) {
         return continues_phrase(right);
     }
     if mark.contains('?') {
         return false;
     }
-    if is_any(word, SUBJECTS) {
+    if in_class(word, SUBJECTS) {
         return continues_phrase(right);
     }
-    if !is_any(word, PREPOSITIONS) || object_precedes(left) {
+    if !in_class(word, PREPOSITIONS) || object_precedes(left) {
         return false;
     }
     // An infinitive can be elided after `to` and can strand other prepositions, as in
@@ -365,8 +366,8 @@ fn joins(left: &str, mark: &str, right: &str) -> bool {
         .split_whitespace()
         .rev()
         .take(4)
-        .any(|word| is_any(word, &["to"]));
-    is_any(next, DETERMINERS) || (!infinitive && continues_phrase(right))
+        .any(|word| in_class(word, &["to"]));
+    in_class(next, DETERMINERS) || (!infinitive && continues_phrase(right))
 }
 
 /// Whether `text` starts with an open-class word that no comma sets off.
@@ -391,7 +392,7 @@ fn continues_phrase(text: &str) -> bool {
             RESTARTS,
         ]
         .iter()
-        .any(|class| is_any(word, class))
+        .any(|class| in_class(word, class))
 }
 
 /// Whether `text` resumes a paused phrase rather than starting a sentence. A lone word,
@@ -406,24 +407,35 @@ fn resumes(text: &str) -> bool {
         && !first.ends_with(['.', '?', '!'])
         && !first.contains(['\'', '’'])
         && !subject(second)
-        && !is_any(first_word(second), DETERMINERS)
+        && !in_class(first_word(second), DETERMINERS)
 }
 
 /// Whether a wh-clause or relative clause (`the team we spoke with`) can supply the
 /// object of the preposition that ends `left`.
 fn object_precedes(left: &str) -> bool {
     let words: Vec<&str> = left.split_whitespace().collect();
-    words.iter().any(|word| is_any(first_word(word), WH_WORDS))
+    words
+        .iter()
+        .any(|word| in_class(first_word(word), WH_WORDS))
         || words
             .windows(2)
             .rfind(|pair| subject(pair[1]))
-            .is_some_and(|pair| is_any(pair[0], &["that"]) || continues_phrase(pair[0]))
+            .is_some_and(|pair| in_class(pair[0], &["that"]) || continues_phrase(pair[0]))
+}
+
+/// Whether `word` belongs to the closed word class `class`. A token of two or more
+/// letters that are all uppercase (`OR`, `IT`, `US`, `WHO`) is an abbreviation, not the
+/// function word it spells, so it belongs to no class.
+fn in_class(word: &str, class: &[&str]) -> bool {
+    let mut letters = word.chars().filter(|c| c.is_alphabetic());
+    let abbreviation = letters.clone().nth(1).is_some() && letters.all(char::is_uppercase);
+    !abbreviation && is_any(word, class)
 }
 
 /// Whether `text` starts with a pronoun that can be a subject.
 fn subject(text: &str) -> bool {
     let word = first_word(text);
-    is_any(word, SUBJECTS) || is_any(word, &["you", "it"])
+    in_class(word, SUBJECTS) || in_class(word, &["you", "it"])
 }
 
 /// Whether `left` ends inside a relative clause, as in `the ones that are. Pending`.
