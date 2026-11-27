@@ -538,6 +538,51 @@ fn merges_judge_a_boundary_by_the_sentence_that_earlier_merges_joined() {
 }
 
 #[test]
+fn an_indefinite_pronoun_before_an_infinitive_supplies_the_object() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // The pronoun is already the object of the stranded preposition.
+            (
+                "There\u{2019}s nothing to be afraid of. The dog is friendly.",
+                "There\u{2019}s nothing to be afraid of. The dog is friendly.",
+            ),
+            (
+                "I have something to write with. The pen works.",
+                "I have something to write with. The pen works.",
+            ),
+            (
+                "We found nobody to work with. The team left.",
+                "We found nobody to work with. The team left.",
+            ),
+            (
+                "She has no one to talk to. The dog helps.",
+                "She has no one to talk to. The dog helps.",
+            ),
+            (
+                "I have something to write with um. The pen works.",
+                "I have something to write with. The pen works.",
+            ),
+            // Without an object before the preposition, a following determiner supplies it.
+            (
+                "They plan to walk to. The station.",
+                "They plan to walk to the station.",
+            ),
+            (
+                "I need to talk to. The manager about it.",
+                "I need to talk to the manager about it.",
+            ),
+            // The infinitive `to` is not the final preposition itself.
+            (
+                "Give something to. The team.",
+                "Give something to the team.",
+            ),
+            ("No one went with. The team.", "No one went with the team."),
+        ],
+    );
+}
+
+#[test]
 fn all_caps_tokens_are_abbreviations_not_function_words() {
     assert_clean_cases(
         CleaningProfile::Safe,

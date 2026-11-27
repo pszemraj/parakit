@@ -35,6 +35,21 @@ const AUXILIARIES: &[&str] = &[
     "am", "is", "are", "was", "were", "do", "does", "did", "have", "has", "had", "can", "could",
     "will", "would", "shall", "should", "may", "might", "must",
 ];
+/// Indefinite pronouns. Before an infinitive they are the object of a stranded preposition
+/// (`nothing to be afraid of`).
+const INDEFINITES: &[&str] = &[
+    "something",
+    "anything",
+    "nothing",
+    "everything",
+    "someone",
+    "anyone",
+    "everyone",
+    "somebody",
+    "anybody",
+    "nobody",
+    "everybody",
+];
 /// Other function words: pronouns, demonstratives, quantifiers, conjunctions, and
 /// prepositions. One after an unfinished phrase starts something new.
 const RESTARTS: &[&str] = &[
@@ -586,10 +601,19 @@ fn resumes(text: &str) -> bool {
         && !in_class(first_word(second), DETERMINERS)
 }
 
-/// Whether a wh-clause or relative clause (`the team we spoke with`) can supply the
-/// object of the preposition that ends `left`.
+/// Whether a wh-clause, a relative clause (`the team we spoke with`), or an indefinite
+/// pronoun before an infinitive (`nothing to be afraid of`) can supply the object of the
+/// preposition that ends `left`. The infinitive `to` must come before that preposition, so
+/// `Give something to` still lacks an object.
 fn object_precedes(left: &str) -> bool {
     let words: Vec<&str> = left.split_whitespace().collect();
+    let before_last = &words[..words.len().saturating_sub(1)];
+    let indefinite = |i: usize| {
+        in_class(first_word(before_last[i]), INDEFINITES)
+            || (i > 0
+                && in_class(first_word(before_last[i]), &["one"])
+                && in_class(first_word(before_last[i - 1]), &["no"]))
+    };
     words
         .iter()
         .any(|word| in_class(first_word(word), WH_WORDS))
@@ -597,6 +621,12 @@ fn object_precedes(left: &str) -> bool {
             .windows(2)
             .rfind(|pair| subject(pair[1]))
             .is_some_and(|pair| in_class(pair[0], &["that"]) || continues_phrase(pair[0]))
+        || (0..before_last.len()).any(|i| {
+            indefinite(i)
+                && before_last[i + 1..]
+                    .iter()
+                    .any(|word| in_class(word, &["to"]))
+        })
 }
 
 /// Whether `word` belongs to the closed word class `class`. A token of two or more
