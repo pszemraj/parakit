@@ -160,3 +160,46 @@ fn a_carried_question_mark_goes_inside_the_closers_that_end_the_sentence() {
         ),
     ]);
 }
+
+#[test]
+fn a_boundary_merged_earlier_in_the_pass_does_not_cut_the_question() {
+    assert_messaging_cases(&[
+        // Each merge sees the sentence that the earlier merges joined.
+        (
+            "Can we take the. Train or? Bus. We could drive.",
+            "Can we take the train or bus? We could drive",
+        ),
+        (
+            "Can we take the um. Train or um? Bus. We could drive.",
+            "Can we take the train or bus? We could drive",
+        ),
+        (
+            "Can we take the um. Train or? Bus. We could drive.",
+            "Can we take the train or bus? We could drive",
+        ),
+        // A filler chain that follows a merge still reaches back to the start.
+        (
+            "Can we take the um. Train or um? Uh. Bus. We could drive.",
+            "Can we take the train or bus? We could drive",
+        ),
+        // Three merges in one sentence, in each pass and across both.
+        (
+            "Can we take the. Train or? Bus and. Taxi. We could drive.",
+            "Can we take the train or bus and taxi? We could drive",
+        ),
+        (
+            "Can we take the um. Train or um. Bus and um? Taxi. We could drive.",
+            "Can we take the train or bus and taxi? We could drive",
+        ),
+        // A boundary that stays still starts the sentence.
+        ("Can we go. I took the? Bus.", "Can we go. I took the bus"),
+        (
+            "Can we go. I took the. Train or? Bus.",
+            "Can we go. I took the train or bus",
+        ),
+        (
+            "Can we take the. Train or? Bus. Is it far? We could drive.",
+            "Can we take the train or bus? Is it far? We could drive",
+        ),
+    ]);
+}

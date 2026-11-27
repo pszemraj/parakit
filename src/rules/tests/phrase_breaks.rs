@@ -514,6 +514,30 @@ fn sentence_merges_keep_stranded_prepositions() {
 }
 
 #[test]
+fn merges_judge_a_boundary_by_the_sentence_that_earlier_merges_joined() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // The wh-word that opens the joined sentence lets `with` end it.
+            (
+                "Who did we meet the. Team with. Alice.",
+                "Who did we meet the team with. Alice.",
+            ),
+            // Without that context the same words merge.
+            (
+                "We met the. Team with. Alice.",
+                "We met the team with alice.",
+            ),
+            // A boundary that stays cuts the context.
+            (
+                "Who left. We met the. Team with. Alice.",
+                "Who left. We met the team with alice.",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn all_caps_tokens_are_abbreviations_not_function_words() {
     assert_clean_cases(
         CleaningProfile::Safe,

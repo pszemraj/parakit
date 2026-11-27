@@ -6,6 +6,7 @@
 //! A token in all capitals (`OR`, `IT`, `US`) is an abbreviation, never a function word.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use super::engine::TransformResult;
 use super::passes::{
@@ -50,7 +51,8 @@ const CLOSERS: [char; 7] = ['\'', '"', '’', '”', ')', ']', '}'];
 /// Merge periods and question marks inside a phrase or relative clause.
 ///
 /// A question mark that a merge removes moves to the end of the merged sentence when
-/// that sentence opens as a question.
+/// that sentence opens as a question. A boundary that an earlier merge of the pass removed
+/// no longer ends the sentence, so it does not cut the context of later decisions.
 ///
 /// # Returns
 /// The repaired text and number of boundaries removed.
@@ -62,10 +64,13 @@ const CLOSERS: [char; 7] = ['\'', '"', '’', '”', ')', ']', '}'];
 /// Captures come from a fixed pattern and slices use its UTF-8 boundaries.
 pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
     let re = regex_static!(r"\w([.?])[ \t]+", "sentence-break pattern");
-    let edits = re.captures_iter(input).filter_map(|captures| {
+    let mut edits = Vec::new();
+    let mut merged: Option<Merge> = None;
+    for captures in re.captures_iter(input) {
         let mark = captures.get(1).unwrap();
         let end = captures.get(0).unwrap().end();
-        let left = last_sentence(&input[..mark.start()]);
+        let left_start = sentence_start(input, mark.start(), merged.as_ref());
+        let left = &input[left_start..mark.start()];
         let right = &input[end..];
         let merge = match mark.as_str() {
             "." if !punctuation_is_sentence_boundary(input, mark.start(), '.') => false,
@@ -77,18 +82,24 @@ pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
             }
         };
         if !merge {
-            return None;
+            continue;
         }
-        let (word_end, next) = continuation(input, end)?;
+        let Some((word_end, next)) = continuation(input, end) else {
+            continue;
+        };
         let gap = &input[mark.end()..end];
-        Some(Edit {
+        merged = Some(Merge {
+            removed: mark.range(),
+            sentence_start: left_start,
+        });
+        edits.push(Edit {
             start: mark.start(),
             end: word_end,
             text: format!("{gap}{next}"),
             carry: mark.as_str() == "?" && opens_question(left),
-        })
-    });
-    apply_edits(input, edits.collect())
+        });
+    }
+    apply_edits(input, edits)
 }
 
 /// Remove commas inside a phrase unless another soon closes an aside.
@@ -149,8 +160,11 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
     let mut matches = re.captures_iter(input).peekable();
     let mut edits: Vec<Edit> = Vec::new();
     let mut pending_terminal: Option<&str> = None;
+    let mut merged: Option<Merge> = None;
     let mut left = "";
+    let mut left_start = 0;
     let mut chain_end = None;
+    let mut chain_removed = 0;
     while let Some(captures) = matches.next() {
         let whole = captures.get(0).unwrap();
         let mut end = whole.end();
@@ -159,7 +173,10 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
         let terminal = captures.name("terminal").map(|m| m.as_str());
         // A chain such as "um? Uh." carries its context and question to the next real word.
         if chain_end != Some(whole.start()) {
-            left = last_sentence(&input[..whole.start()]);
+            left_start = sentence_start(input, whole.start(), merged.as_ref());
+            left = &input[left_start..whole.start()];
+            // The first alternative keeps the boundary that precedes its fillers.
+            chain_removed = whole.start() + captures.get(1).map_or(0, |m| m.len());
         }
         chain_end = Some(whole.end());
         let pending = pending_terminal.take();
@@ -193,6 +210,10 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
                 replacement.push_str(&next);
                 end = word_end;
                 carry = terminal.contains('?') && opens_question(left);
+                merged = Some(Merge {
+                    removed: chain_removed..whole.end(),
+                    sentence_start: left_start,
+                });
             } else {
                 // The kept mark follows the word before the chain, so the spaces that
                 // earlier fillers of the chain left would only detach it.
@@ -325,10 +346,33 @@ fn last_word(text: &str) -> &str {
     }
 }
 
+/// The latest merge of a pass: the input span it removed, and where the sentence that it
+/// joined began.
+struct Merge {
+    removed: Range<usize>,
+    sentence_start: usize,
+}
+
+/// Where the sentence that ends at `end` begins. A boundary that `merge` removed does not
+/// end a sentence, so the sentence extends back to the start of the one the merge joined.
+/// Each merge records the start it found this way, so consecutive merges chain.
+fn sentence_start(input: &str, end: usize, merge: Option<&Merge>) -> usize {
+    let start = last_sentence_start(&input[..end]);
+    match merge {
+        // The boundary is the byte before the start of the sentence it cut.
+        Some(merge) if start > 0 && merge.removed.contains(&(start - 1)) => merge.sentence_start,
+        _ => start,
+    }
+}
+
 /// The text after the last sentence boundary.
 fn last_sentence(text: &str) -> &str {
-    let start = text
-        .char_indices()
+    &text[last_sentence_start(text)..]
+}
+
+/// The offset after the last sentence boundary of `text`.
+fn last_sentence_start(text: &str) -> usize {
+    text.char_indices()
         .rfind(|&(i, c)| {
             c == '\n'
                 || (punctuation_is_sentence_boundary(text, i, c)
@@ -336,8 +380,7 @@ fn last_sentence(text: &str) -> &str {
                         .trim_start_matches(CLOSERS)
                         .starts_with(char::is_whitespace))
         })
-        .map_or(0, |(i, _)| i + 1);
-    &text[start..]
+        .map_or(0, |(i, _)| i + 1)
 }
 
 /// Whether the last word of `left` is unfinished and `right` can complete it.
