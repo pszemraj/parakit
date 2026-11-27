@@ -4,6 +4,10 @@ use super::*;
 
 /// Cleans each case with the default dictation settings, which drop one final period, and
 /// checks that the output is stable.
+///
+/// # Panics
+/// When a case's cleaned text differs from its expectation, or cleaning that expectation
+/// changes it again.
 pub(super) fn assert_messaging_cases(cases: &[(&str, &str)]) {
     let cleaner = cleaner_messaging_default(CleaningProfile::Safe);
     for (input, expected) in cases {
