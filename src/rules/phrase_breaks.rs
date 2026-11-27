@@ -201,7 +201,8 @@ pub(super) fn remove_filled_pauses(input: &str) -> TransformResult<'_> {
                     earlier.text.clear();
                     boundary = earlier.start;
                 }
-                replacement = format!("{terminal} ");
+                // The match ends at the mark, so the text after it keeps its own spacing.
+                replacement = terminal.to_owned();
             }
         }
         edits.push(Edit {

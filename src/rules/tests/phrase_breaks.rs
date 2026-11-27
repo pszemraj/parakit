@@ -66,6 +66,55 @@ fn sentence_merges_and_fillers_share_capitalization_exceptions() {
 }
 
 #[test]
+fn a_kept_filler_mark_leaves_the_text_after_it_untouched() {
+    use crate::rules::phrase_breaks::remove_filled_pauses;
+
+    // The pass writes the mark alone, so it neither doubles the spacing after it nor
+    // detaches it from a closing quote or bracket. A later pass would hide the doubling.
+    let cases = [
+        ("Is it ready um? Yes it is.", "Is it ready? Yes it is."),
+        ("It works um. Thanks", "It works. Thanks"),
+        (
+            "He said \u{201c}Are you ready um?\u{201d}",
+            "He said \u{201c}Are you ready?\u{201d}",
+        ),
+        (
+            "He said \"Are you ready um.\" Then left.",
+            "He said \"Are you ready.\" Then left.",
+        ),
+        ("(Are you ready um?) Then go.", "(Are you ready?) Then go."),
+        ("Is it ready um.\nNext", "Is it ready.\nNext"),
+        ("Is it ready um. \tNext", "Is it ready. \tNext"),
+        ("Is it ready um? Uh. Yes.", "Is it ready? Yes."),
+        ("Is it ready um, uh? Yes.", "Is it ready? Yes."),
+        // A mark that the input glues to the next word stays glued.
+        ("Is it ready um?Yes.", "Is it ready?Yes."),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            remove_filled_pauses(input).text,
+            expected,
+            "input {input:?}"
+        );
+    }
+    let cleaner = cleaner_keep_period(CleaningProfile::Safe);
+    for (input, expected) in [
+        (
+            "He said \u{201c}Are you ready um?\u{201d}",
+            "He said \u{201c}Are you ready?\u{201d}",
+        ),
+        ("(Are you ready um?) Then go.", "(Are you ready?) Then go."),
+        ("It works um. Thanks", "It works. Thanks"),
+        ("Is it ready um.\nNext", "Is it ready.\nNext"),
+        ("Is it ready um? Uh. Yes.", "Is it ready? Yes."),
+    ] {
+        let once = cleaner.clean_text(input);
+        assert_eq!(once, expected, "input {input:?}");
+        assert_eq!(cleaner.clean_text(&once), once, "output {once:?}");
+    }
+}
+
+#[test]
 fn filled_pauses_drop_their_terminal_punctuation() {
     assert_clean_cases(
         CleaningProfile::Safe,
