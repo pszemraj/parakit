@@ -305,29 +305,83 @@ fn apply_edits(input: &str, edits: Vec<Edit>) -> TransformResult<'_> {
 
 /// Turn the period that ends the sentence at `from` into a question mark. A sentence that
 /// ends in `?` or `!`, or in an ellipsis, stays; one without a terminal gets `?` after its
-/// last word, inside the quotes and brackets that enclose the question.
+/// last word, inside the quotes and brackets that enclose the question. A terminal that
+/// closes a quote opened inside the question belongs to that quote: the question goes on
+/// when a lowercase word follows the quote, and otherwise ended with it, so no mark is added.
 fn carry_question(text: &mut String, from: usize) {
     // Merged boundaries are already gone from `text`, so this is the whole question.
     let start = last_sentence_start(&text[..from]);
+    let body = start + text[start..].find(char::is_alphabetic).unwrap_or(0);
     let insert_at = |text: &str, to: usize| {
         let to = from + text[from..to].trim_end().len();
         to - enclosing_closers(&text[start..to])
     };
-    let end = text[from..]
-        .char_indices()
-        .map(|(i, c)| (from + i, c))
-        .find(|&(i, c)| ends_sentence(text, i, c));
-    match end {
-        Some((i, '\n')) => text.insert(insert_at(text, i), '?'),
-        // The period of an abbreviation stays, and the mark follows it.
-        Some((i, '.')) if !punctuation_is_sentence_boundary(text, i, '.') => {
-            text.insert(i + 1, '?');
+    let mut at = from;
+    let (i, c) = loop {
+        let end = text[at..]
+            .char_indices()
+            .map(|(i, c)| (at + i, c))
+            .find(|&(i, c)| ends_sentence(text, i, c));
+        let Some((i, c)) = end else {
+            text.insert(insert_at(text, text.len()), '?');
+            return;
+        };
+        let after = &text[i + c.len_utf8()..];
+        let closers = after.len() - after.trim_start_matches(CLOSERS).len();
+        let quoted = c != '\n'
+            && after
+                .chars()
+                .next()
+                .is_some_and(|closer| closers > 0 && closes_inside(&text[body..i], closer));
+        if !quoted {
+            break (i, c);
         }
+        let resumed = after[closers..].trim_start_matches([' ', '\t']);
+        if !resumed.starts_with(char::is_lowercase) {
+            return;
+        }
+        at = i + c.len_utf8() + closers;
+    };
+    match c {
+        '\n' => text.insert(insert_at(text, i), '?'),
+        // The period of an abbreviation stays, and the mark follows it.
+        '.' if !punctuation_is_sentence_boundary(text, i, '.') => text.insert(i + 1, '?'),
         // The last dot of an ASCII ellipsis follows another dot and stays.
-        Some((i, '.')) if !text[..i].ends_with('.') => text.replace_range(i..=i, "?"),
-        Some(_) => {}
-        None => text.insert(insert_at(text, text.len()), '?'),
+        '.' if !text[..i].ends_with('.') => text.replace_range(i..=i, "?"),
+        _ => {}
     }
+}
+
+/// Whether `closer` ends a quote or bracket that opens inside `body`, the text of a
+/// sentence from its first letter. The `”` of `Text “I agree.”` does. The `”` of `“Do you
+/// want tea or coffee.”` closes a quote that opened before the sentence, so it encloses the
+/// question instead. An apostrophe between two letters is neither opener nor closer.
+fn closes_inside(body: &str, closer: char) -> bool {
+    let Some(opener) = ['“', '‘', '(', '[', '{', '"', '\'']
+        .into_iter()
+        .find(|&opener| closer_of(opener) == Some(closer))
+    else {
+        return false;
+    };
+    let count = |mark: char| {
+        body.char_indices()
+            .filter(|&(i, c)| {
+                c == mark && !(matches!(c, '\'' | '‘' | '’') && is_apostrophe(body, i))
+            })
+            .count()
+    };
+    if opener == closer {
+        count(opener) % 2 == 1
+    } else {
+        count(opener) > count(closer)
+    }
+}
+
+/// Whether the character at byte `i` of `text` sits between two letters or digits.
+fn is_apostrophe(text: &str, i: usize) -> bool {
+    let before = text[..i].chars().next_back();
+    let after = text[i..].chars().nth(1);
+    before.is_some_and(char::is_alphanumeric) && after.is_some_and(char::is_alphanumeric)
 }
 
 /// The byte length of the closing quotes and brackets at the end of `sentence` that enclose

@@ -393,3 +393,55 @@ fn a_carried_question_mark_goes_inside_only_the_closers_that_enclose_the_questio
         ("Do you want tea or? Coffee", "Do you want tea or coffee?"),
     ]);
 }
+
+#[test]
+fn a_terminal_inside_a_quote_does_not_end_the_question() {
+    assert_messaging_cases(&[
+        // The quote's own period stays, and the question goes on after a lowercase word.
+        // The capitalization pass restarts the sentence after `.\u{201d}` as it does
+        // without a carry.
+        (
+            "Can you send the? Text \u{201c}I agree.\u{201d} to Sam.",
+            "Can you send the text \u{201c}I agree.\u{201d} To Sam?",
+        ),
+        (
+            "Can you send the? Text \"I agree.\" to Sam.",
+            "Can you send the text \"I agree.\" To Sam?",
+        ),
+        (
+            "Can you send the? Note (see below.) to Sam.",
+            "Can you send the note (see below.) To Sam?",
+        ),
+        (
+            "Did you read the? Note \u{201c}Are you free?\u{201d} today.",
+            "Did you read the note \u{201c}Are you free?\u{201d} Today?",
+        ),
+        // Otherwise the question ended with the quote, and no mark is added.
+        (
+            "Can you send the? Text \u{201c}I agree.\u{201d} I can wait.",
+            "Can you send the text \u{201c}I agree.\u{201d} I can wait",
+        ),
+        (
+            "Can you send the? Text \u{201c}I agree.\u{201d}",
+            "Can you send the text \u{201c}I agree.\u{201d}",
+        ),
+        (
+            "\u{201c}Do you want tea or? Coffee from \u{201c}Central Perk.\u{201d}\u{201d} I can wait.",
+            "\u{201c}Do you want tea or coffee from \u{201c}Central Perk.\u{201d}\u{201d} I can wait",
+        ),
+        // A closer whose opener is not inside the question encloses it, so the terminal
+        // before it is the question's own, with or without the opener in the sentence.
+        (
+            "\u{201c}Do you want tea or? Coffee.\u{201d} I can make some.",
+            "\u{201c}Do you want tea or coffee?\u{201d} I can make some",
+        ),
+        (
+            "Do you want tea or? Coffee.\" she asked.",
+            "Do you want tea or coffee?\" She asked",
+        ),
+        (
+            "Do you want tea or? Coffee.) Thanks.",
+            "Do you want tea or coffee?) Thanks",
+        ),
+    ]);
+}
