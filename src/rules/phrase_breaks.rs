@@ -126,7 +126,7 @@ pub(super) fn remove_function_word_commas(input: &str) -> TransformResult<'_> {
         let mark = captures.name("mark").unwrap();
         let left = last_sentence(&input[..mark.start()]);
         let right = &text[captures.get(0).unwrap().end()..];
-        let initial = left.trim() == word;
+        let initial = from_first_letter(left) == word;
         // Conjunctions often open a clause with an aside. A subordinator that does not
         // start its sentence still joins a clause that starts with a pronoun.
         let opener = in_class(word, COORDINATORS)
@@ -319,7 +319,7 @@ fn carry_question(text: &mut String, from: usize) {
 /// attached `'s`, `'re`, `'ll`, or `'d` (`What's`). A wh-word also opens statements such
 /// as `What I need is`, so any other wh-word does not count.
 fn opens_question(left: &str) -> bool {
-    let text = left.trim_start_matches(|c: char| !c.is_alphabetic());
+    let text = from_first_letter(left);
     let opener = word_with_apostrophes(text);
     if let Some(auxiliary) = auxiliary(opener) {
         return subject_follows(auxiliary, &text[opener.len()..]);
@@ -376,6 +376,12 @@ fn word_with_apostrophes(text: &str) -> &str {
         .find(|c: char| !(c.is_alphabetic() || matches!(c, '\'' | '’')))
         .unwrap_or(text.len());
     &text[..end]
+}
+
+/// The sentence `left` begins, without the quotes, brackets, or digits that precede its
+/// first letter, so that an opening word is read the same inside `“They, ...”`.
+fn from_first_letter(left: &str) -> &str {
+    left.trim_start_matches(|c: char| !c.is_alphabetic())
 }
 
 fn first_word(text: &str) -> &str {

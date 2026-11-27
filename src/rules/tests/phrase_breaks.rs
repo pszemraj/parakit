@@ -725,6 +725,51 @@ fn commas_pair_around_asides_by_where_the_clause_ends() {
 }
 
 #[test]
+fn a_sentence_opener_is_read_past_quotes_and_brackets() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // A subject pronoun that opens a quoted or bracketed sentence still opens an aside.
+            (
+                "\u{201c}They, tired from the trip, went home.\u{201d}",
+                "\u{201c}They, tired from the trip, went home.\u{201d}",
+            ),
+            (
+                "\u{2018}They, tired from the trip, went home.\u{2019}",
+                "\u{2018}They, tired from the trip, went home.\u{2019}",
+            ),
+            (
+                "(They, tired from the trip, went home.)",
+                "(They, tired from the trip, went home.)",
+            ),
+            // The clause still ends at a coordinator.
+            (
+                "\u{201c}We, went to the store, and bought milk.\u{201d}",
+                "\u{201c}We went to the store, and bought milk.\u{201d}",
+            ),
+            // So does a subordinator that opens a quoted sentence, as at the start of a line.
+            (
+                "\u{201c}Because, it was raining hard.\u{201d}",
+                "\u{201c}Because, it was raining hard.\u{201d}",
+            ),
+            (
+                "\u{201c}They stayed because, it was raining.\u{201d}",
+                "\u{201c}They stayed because it was raining.\u{201d}",
+            ),
+            // Unquoted sentences read as before.
+            (
+                "They, tired from the trip, went home.",
+                "They, tired from the trip, went home.",
+            ),
+            (
+                "We, went to the store, and bought milk.",
+                "We went to the store, and bought milk.",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn filler_terminals_stay_when_the_next_word_embeds_a_filler() {
     // The continuation word can hold a filler (`Store-um`), so merging into it would
     // reach into the next filler match.
