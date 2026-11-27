@@ -847,6 +847,52 @@ fn a_carried_question_mark_respects_where_the_sentence_ends() {
 }
 
 #[test]
+fn a_carried_question_mark_goes_inside_the_closers_that_end_the_sentence() {
+    assert_messaging_cases(&[
+        // Without a terminal, the mark follows the last word and precedes quotes and brackets.
+        (
+            "\u{201c}Do you want tea or? Coffee\u{201d}",
+            "\u{201c}Do you want tea or coffee?\u{201d}",
+        ),
+        (
+            "\"Do you want tea or? Coffee\"",
+            "\"Do you want tea or coffee?\"",
+        ),
+        (
+            "(Do you want tea or? Coffee)",
+            "(Do you want tea or coffee?)",
+        ),
+        (
+            "\u{201c}(Do you want tea or? Coffee)\u{201d}",
+            "\u{201c}(Do you want tea or coffee?)\u{201d}",
+        ),
+        (
+            "\u{201c}Do you want tea or? Coffee\u{201d}\nMore text.",
+            "\u{201c}Do you want tea or coffee?\u{201d}\nMore text",
+        ),
+        (
+            "(Do you want tea or? Coffee)\nMore text.",
+            "(Do you want tea or coffee?)\nMore text",
+        ),
+        (
+            "\u{201c}Do you want the um? Red one\u{201d}",
+            "\u{201c}Do you want the red one?\u{201d}",
+        ),
+        // A terminal inside the closers is the one that changes.
+        (
+            "\u{201c}Do you want tea or? Coffee.\u{201d} I can make some.",
+            "\u{201c}Do you want tea or coffee?\u{201d} I can make some",
+        ),
+        // Text without closers still ends in the mark.
+        ("Do you want tea or? Coffee", "Do you want tea or coffee?"),
+        (
+            "Do you want tea or? Coffee\nMore text.",
+            "Do you want tea or coffee?\nMore text",
+        ),
+    ]);
+}
+
+#[test]
 fn auxiliaries_still_start_a_sentence_after_a_filler() {
     assert_clean_cases(
         CleaningProfile::Safe,

@@ -44,6 +44,9 @@ const RESTARTS: &[&str] = &[
     "between", "over", "under", "versus",
 ];
 
+/// Closing quotes and brackets, which can follow the terminal that ends a sentence.
+const CLOSERS: [char; 7] = ['\'', '"', '’', '”', ')', ']', '}'];
+
 /// Merge periods and question marks inside a phrase or relative clause.
 ///
 /// A question mark that a merge removes moves to the end of the merged sentence when
@@ -252,16 +255,18 @@ fn apply_edits(input: &str, edits: Vec<Edit>) -> TransformResult<'_> {
 }
 
 /// Turn the period that ends the sentence at `from` into a question mark. A sentence that
-/// ends in `?` or `!`, or in an ellipsis, stays; one without a terminal gets `?`.
+/// ends in `?` or `!`, or in an ellipsis, stays; one without a terminal gets `?` after its
+/// last word, inside any quote or bracket that closes it.
 fn carry_question(text: &mut String, from: usize) {
     let ends = |rest: &str| {
-        let rest = rest.trim_start_matches(['\'', '"', '’', '”', ')', ']', '}']);
+        let rest = rest.trim_start_matches(CLOSERS);
         rest.is_empty() || rest.starts_with(char::is_whitespace)
     };
+    let insert_at =
+        |text: &str, to: usize| from + text[from..to].trim_end().trim_end_matches(CLOSERS).len();
     for (i, c) in text[from..].char_indices().map(|(i, c)| (from + i, c)) {
         if c == '\n' {
-            let at = from + text[from..i].trim_end().len();
-            text.insert(at, '?');
+            text.insert(insert_at(text, i), '?');
             return;
         }
         if matches!(c, '.' | '?' | '!')
@@ -274,8 +279,7 @@ fn carry_question(text: &mut String, from: usize) {
             return;
         }
     }
-    let at = from + text[from..].trim_end().len();
-    text.insert(at, '?');
+    text.insert(insert_at(text, text.len()), '?');
 }
 
 /// Whether the sentence that `left` begins opens as an inverted question: an auxiliary
@@ -329,7 +333,7 @@ fn last_sentence(text: &str) -> &str {
             c == '\n'
                 || (punctuation_is_sentence_boundary(text, i, c)
                     && text[i + 1..]
-                        .trim_start_matches(['\'', '"', '’', '”', ')', ']', '}'])
+                        .trim_start_matches(CLOSERS)
                         .starts_with(char::is_whitespace))
         })
         .map_or(0, |(i, _)| i + 1);
