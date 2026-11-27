@@ -114,6 +114,9 @@ fn status_distinguishes_cli_daemon_and_unreported_versions() {
                         Err(error) => panic!("status endpoint failed: {error}"),
                     }
                 };
+                // An accepted socket can inherit the listener's non-blocking mode (it does
+                // on macOS), and the read must wait for the client's request.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
