@@ -1,40 +1,77 @@
 # Cleaning Rules
 
-parakit applies a typed, deterministic cleanup pipeline after ASR and before text insertion. Built-in passes use the [engines described below](#choosing-an-engine).
+parakit cleans ASR transcripts before inserting them.
 
-Built-in passes are code in `src/rules/`. Personal, non-generalizable rules can be added without editing code via `config.toml`; see [User Rules](#user-rules) below.
+## Word Replacements
+
+Open the file with `parakit config edit`. If it already has a `[replacements]` table, add the two assignments under its heading. Otherwise add the whole block. Put the word parakit transcribes on the left and the desired text on the right.
+
+```toml
+[replacements]
+quan = "Qwen"
+rust = { replacement = "Rust", case_sensitive = true }
+```
+
+A plain string matches a whole word regardless of case. The inline table in this example matches the exact spelling `rust`. See the [config reference](config_reference.toml) for accepted keys and values.
+
+Save the file, then check the settings and preview the result.
+
+```bash
+parakit config show
+parakit rules test "Try QUAN, quandary, rust and RUST"
+```
+
+With default cleaning settings, the `Clean:` line reads `Try Qwen, quandary, Rust and RUST`. Sentence capitalization runs before exact-case matching, so lowercase `rust` at the start of a sentence can arrive as `Rust`. A correction cannot trigger another correction in the same pass. For example, `quan = "Qwen"` produces `Qwen` even if a separate entry maps `qwen` to `qwen3`.
+
+Apply the changes with the [configuration restart workflow](configuration.md#validation-and-recovery). Find individual corrections by name, such as `replace-word:quan`, in the [rule list](#inspect-and-test) and [transcription logs](logging.md#transcription-record-fields). Use [regex rules](#user-rules) for phrases and patterns.
 
 ## Profiles
 
-The default `safe` profile preserves discourse and meaning. It performs whitespace and punctuation repair, removes high-confidence filled pauses, collapses conservative stutters, expands selected casual forms, drops a trailing connective left dangling at the end of the transcript, converts number expressions, collapses spaced uppercase-letter runs, and capitalizes true sentence starts without treating decimal, version, domain, email, filename, or dotted-identifier periods as sentence boundaries.
-
-```bash
-parakit start --cleaning-profile safe
-```
-
-The `aggressive` profile includes every safe pass and adds stylistic deletion of leading discourse markers and broad filler uses of `like`, `you know`, and similar phrases. Those edits can change emphasis or meaning, so they are opt-in.
+The default `safe` profile applies common formatting and spelling repairs. The `aggressive` profile also removes leading discourse markers and contextual uses of phrases such as `like` and `you know`. Those edits can change emphasis or meaning.
 
 ```bash
 parakit start --cleaning-profile aggressive
 ```
 
-A single terminal period is removed by default because parakit primarily targets messaging-style dictation. A final `?`, `!`, or ellipsis is kept. Preserve the period when the target context expects conventional prose punctuation:
+By default, parakit drops a single final period for messaging. It keeps a final `?`, `!`, or ellipsis. Use the following command to retain periods in prose.
 
 ```bash
 parakit start --keep-trailing-period
 ```
 
-These settings also live in `config.toml` as `cleaning.profile` and `cleaning.keep_trailing_period`. Number conversion has the config-only `cleaning.number_threshold` setting. The exact CLI/config merge behavior is in the per-key [config reference](config_reference.toml).
-
-Cleaning includes English rules. For multilingual dictation, disable built-in and user cleaning together with `[cleaning] enabled = false` or:
+For raw model text, such as multilingual dictation, set `cleaning.enabled = false` or pass `--no-cleaning`.
 
 ```bash
 parakit start --no-cleaning
 ```
 
-## General Invariants
+## Built-in Rules
 
-The default pipeline favors structural rules over product- or vocabulary-specific substitutions.
+### Function-word Punctuation
+
+Both profiles include `merge-sentence-breaks` and `function-word-commas` for every model. Disable either by name with `--disable-rule` or [`cleaning.disabled_rules`](config_reference.toml); see [Inspect and Test](#inspect-and-test).
+
+The passes consult closed grammatical classes only (conjunctions, articles and possessives, pronouns, prepositions, wh-words, auxiliaries), and a mark goes only when those words show that the sentence continues. A boundary that only ordinary vocabulary could settle, such as an adjective split from its noun (`Logical. Pieces`), stays as transcribed. A token in all capitals (`OR`, `IT`, `US`, `WHO`) is an abbreviation rather than a function word, so `We moved to Portland, OR. The new job starts Monday` keeps its period and `Talk to the. IT team` merges.
+
+Sentence merging removes a period after a word that cannot end a sentence. A coordinator or a subordinator such as `because` or `if` joins whatever follows, as in `and. Fails` and `because. The roof leaked`, except that different consecutive coordinators such as `but. And` keep their boundary. An article or possessive joins an ordinary word (`the. Larger file`) but not a function word or a word set off by a comma, so `the. They are late` and `the. Sorry, the big one` keep their periods. Question marks merge only after conjunctions and those articles and possessives. When the merged question mark splits a sentence that opens as an inverted question, it moves to the end of the merged sentence, so `Do you want tea or? Coffee. I can make some` becomes `Do you want tea or coffee? I can make some`. An ellipsis, typed as `...` or `…`, ends a sentence both ways: the sentence that ends in one keeps it and gets no mark, and the one that follows one is read from its own start, so `Can we stop… I want the? Blue one` stays a statement, as it does with `...`. A period after an abbreviation such as `p.m.` or `etc.` also ends a sentence when a capitalized function word follows, so `Can you get the? Report by 5 p.m. I can wait` becomes `Can you get the report by 5 p.m.? I can wait` and `We left at 5 p.m. Can we take the? Bus` reads its question from `Can`. Any other word goes on (`5 p.m. tomorrow`, `Mr. Smith`), and a title such as `Dr.` or `Mr.` never ends a sentence. A sentence with no terminal of its own gets the mark after its last word and inside the quotes and brackets that enclose the question, meaning those whose opener comes before its first letter: `“Do you want tea or? Coffee”` becomes `“Do you want tea or coffee?”`, but a closer that ends a phrase inside it stays before the mark (`Do you want tea or? Coffee from “Central Perk”` becomes `Do you want tea or coffee from “Central Perk”?`), and so does a plural possessive (`the cats’?`). A terminal that closes a quote opened inside the question belongs to that quote, not to the question: when a lowercase word follows the quote the question goes on (`Can you send the? Text “I agree.” to Sam` becomes `Can you send the text “I agree.” To Sam?`), and otherwise it ended with the quote and no mark is added (`Can you send the? Text “I agree.” I can wait`). A closer whose quote opened before the question encloses it, so `“Do you want tea or? Coffee.” I can make some` still becomes `“Do you want tea or coffee?” I can make some`. An inverted question opens with an auxiliary (`do`, `can`, `is`) or its negative contraction (`Shouldn't`, `Can't`, `Won't`) followed by a subject: a subject pronoun, an article or possessive, `this`, `that`, `these`, `those`, or `there` (`Is the? Build ready`, `Shouldn't we take the? Train`). After `do` and `have` only a subject pronoun counts (`Do you want tea or? Coffee`), because `Do the dishes` and `Have it ready` are imperatives. Their negative contractions take any subject (`Haven't the? Tests finished yet`), since a negative imperative takes a verb (`Don't forget`). A wh-word followed by an auxiliary (`What is the? Plan`, `Why didn't the? Build run`) or with an attached `'s`, `'re`, `'ll`, or `'d` (`What's the? Plan`) opens one too. Other sentences drop the mark, because Qwen also marks rising intonation on statements: `I went to the? Store` becomes `I went to the store`, and so do an imperative (`Do the? Dishes before bed`), a sentence that opens with a name that spells an auxiliary (`Will said the? Build failed`), and a question with an open-class subject (`Is Peter coming or? Not`). A wh-word that opens a statement (`What I need is the? Red one`) and a subject question (`Who broke the? Build`) also drop it. A boundary that an earlier merge of the same pass removed does not cut the sentence, so `Can we take the. Train or? Bus. We could drive` becomes `Can we take the train or bus? We could drive`, while a boundary that stays does (`Can we go. I took the? Bus` becomes `Can we go. I took the bus`).
+
+The prepositions `to`, `of`, `into`, `from`, `with`, `for`, and `without` join an article or possessive, as in `to. The previous task`. They keep the period when a wh-clause or relative clause can supply their object, as in `what they tied it to. The second rope`, and when an indefinite pronoun such as `something`, `nothing`, or `no one` is followed by an infinitive that precedes them, as in `There's nothing to be afraid of. The dog is friendly`. They also keep it after an infinitive such as `to take care of. Please help`. Adverbial particles such as `on` and nominative pronouns never merge: `Hold on. Dinner is ready`, `Then they. Painted the fence`, and `Where shall we? Let's start` stay as spoken.
+
+The only merge into a following clause is the relative clause split after `which is`, `which are`, `which was`, `which were`, `that are`, or `that were` (`apples that are. Slightly green`). Other sentence starts, including `This works so well. Is anyone free today?`, keep their boundary.
+
+After a merge, the next word loses its sentence-initial capital. The pass preserves `I` and its contractions, acronyms and other mixed-case tokens, dotted tokens, and English weekday and month names except `March` and `May`. Use [word replacements](#word-replacements) for personal names.
+
+Comma removal uses the same evidence. It repairs `the, larger file` and `of, a pile` while preserving a pair of commas around an aside, as in `my, frankly, terrible advice`. Inside a noun or prepositional phrase an aside is a word or two, so only a comma within the next two words closes it. After the subject pronoun that opens a sentence, even inside quotes or brackets, an aside can be a whole phrase, as in `They, tired from the trip, went straight home`, so the next comma closes it, unless that comma comes before a coordinator, a subordinator, or a wh-word, which ends the clause (`We, went to the store, and bought milk` loses its first comma). A comma in the next sentence or on the next line does not close it. A coordinator keeps its comma. A subordinator keeps it at the start of a sentence, and elsewhere loses it only before a pronoun subject (`because, it was raining`, but `because, the roof leaked`). Single-letter labels such as `A, then B` are left alone.
+
+### Filled Pauses
+
+`filled-pauses` runs for every model. It removes the hesitation, and its mark when the words before it cannot end a sentence. `go to um. The main config` becomes `go to the main config`, and `and um. I can help` becomes `and I can help`. A wh-word also joins a following subject pronoun, so `Check what um. It can do` becomes `Check what it can do`. A question mark follows the same rule as in [sentence merging](#function-word-punctuation), so `Do you want the um? Red one` becomes `Do you want the red one?`.
+
+After a complete phrase, a period also goes when an ordinary word resumes it, as in `Please um. Review carefully`. A new sentence that opens the same way merges too, so `That's all um. Thanks for listening` becomes `That's all thanks for listening`. The period stays before a lone word (`It works um. Thanks`), a contraction (`the report, um. Let's go`), a subject after the first word (`We shipped it um. Then we went home`), a determiner after the first word (`the tooling um. Set a goal`), and any function word. Question and exclamation marks stay, as in `Is it ready um? Yes`. A mark that stays takes the filler's place and leaves the text after it as written, so `He said "Are you ready um?"` becomes `He said "Are you ready?"`.
+
+### Sentence Capitalization
+
+Sentence capitalization uppercases the first letter of a whitespace-delimited token after a sentence boundary. Opening quotes, brackets, inverted question and exclamation marks, emphasis asterisks, and a leading dash can precede the letter. Dotted tokens such as domains and decimal numbers retain their internal boundaries. The pass preserves the spelling of dotfiles, filenames, paths, URLs, and identifiers such as `#general`, `__init__.py`, and `.gitignore`. Literal spoken `dot` and `point` remain words outside [numeric expressions](#versions-and-identifiers).
 
 ### Acronyms
 
@@ -42,7 +79,7 @@ Any run of two or more standalone uppercase ASCII letters separated by exactly o
 
 ### Numbers
 
-English cardinal and ordinal recognition uses [`text2num`](https://crates.io/crates/text2num). Quantities, versions, years, identifiers, and sizes share one tokenization and classification pass; numeric output is never reparsed by a later numeric category. Their [controls](#numeric-controls-and-migration) are independent, with shared boundaries and protections.
+English cardinal and ordinal recognition uses [`text2num`](https://crates.io/crates/text2num). Quantities, versions, years, identifiers, and sizes share one classification pass. Each [numeric control](#numeric-controls-and-migration) can be disabled individually.
 
 #### Threshold And Adjacent Numbers
 
@@ -106,15 +143,15 @@ Numeric prefixes use the same component parsing (`Version 2 point zero five` bec
 
 #### Numeric Controls And Migration
 
-The five numeric controls are independently disabled through `cleaning.disabled_rules` or `--disable-rule`. They share one classification/rendering group and report separate rule hits:
+The five numeric controls report hits separately. Use their names to [disable individual passes](#inspect-and-test).
 
 | Control | Rendering |
 | --- | --- |
-| `spoken-numbers` | Ordinary cardinal and ordinal quantities, using `cleaning.number_threshold`. |
-| `spoken-versions` | Spoken decimal components, dotted versions, numeric point suffixes, and `v` prefixes. |
-| `calendar-years` | Century pairs beginning with 19 or 20, except before a unit or AM/PM/size marker. |
-| `numeric-identifiers` | A single uppercase letter other than A/I, or SM, joined to an existing or threshold-rendered number. |
-| `size-suffixes` | Explicit `K`/`M`/`B` suffixes and compact parameter counts. |
+| `spoken-numbers` | [Cardinals and ordinals](#threshold-and-adjacent-numbers) |
+| `spoken-versions` | [Decimals and versions](#versions-and-identifiers) |
+| `calendar-years` | [Century-pair years](#calendar-years) |
+| `numeric-identifiers` | [Identifiers](#versions-and-identifiers) |
+| `size-suffixes` | [Sizes and parameter counts](#magnitudes-and-parameter-counts) |
 
 The former eight numeric passes have been replaced by these five controls. Update existing disabled-rule settings using this mapping; removed names have no aliases and fail configuration validation:
 
@@ -126,7 +163,7 @@ The former eight numeric passes have been replaced by these five controls. Updat
 | `numeric-identifier-groups` | Removed; adjacent digit groups remain separate. |
 | `compact-parameter-counts`, `numeric-magnitude-suffixes` | `size-suffixes` |
 
-Disabling `spoken-numbers` leaves the other four categories available. After updating the config, run `parakit config show`, inspect `parakit rules list`, and check representative text with `parakit rules test`. Restart the daemon to load the new settings.
+Check migrated settings with the [edit and validation workflow](configuration.md#validation-and-recovery).
 
 ### Casual Forms And Stutters
 
@@ -134,15 +171,15 @@ Safe casual-form normalization expands `gonna`/`gunna` to `going to`, `gotta` to
 
 Dangling-connective removal drops final `so`, `but`, `and`, `or`, or `because` case-insensitively only when punctuation remains underneath. It preserves `.`, `!`, and `?`, promotes `,`, `;`, or `:` to `.`, and can remove a chain (`It works. And so.` becomes `It works.` before terminal-period handling). Without that boundary, `I like cats and dogs and` stays unchanged because the unfinished thought is ambiguous.
 
-`stutter-safe-words` collapses adjacent identical words case-insensitively, keeping the first spelling (`where where` becomes `where`). A pronoun restarted as its contraction keeps the suffix (`it it's` becomes `it's`). Only spaces and tabs join a run; punctuation and line breaks preserve repetitions. Numbers, spelling letters other than `I`/`a`, and the built-in exceptions remain intact. Exceptions include common idioms and intensifiers (`hee`, `bang`, `poo`, `very`) and the symbol words `plus`, `dash`, `equals`, `slash`, `dot`, `star`, `underscore`, `colon`, and `pipe`. Other symbol names follow ordinary repetition handling. The complete list lives beside the scanner in `src/rules/stutters.rs`.
+`stutter-safe-words` collapses adjacent identical words case-insensitively, keeping the first spelling (`where where` becomes `where`). A pronoun restarted as its contraction keeps the suffix (`it it's` becomes `it's`). Punctuation and line breaks preserve repetitions. Numbers, spelling letters other than `I`/`a`, and [built-in exceptions](../src/rules/stutters.rs) remain intact. Exceptions include idioms and intensifiers (`hee`, `bang`, `poo`, `very`) and symbol words such as `plus`, `dash`, and `slash`.
 
-Both profiles preserve the built-in exception `her her`, as in `I gave her her keys back`. Add your own words or literal phrases with [`cleaning.repetition_exceptions`](configuration.md#preserving-repeated-words); these supplement the built-in list.
+Both profiles preserve `her her` in `I gave her her keys back` and collapse repeated `a` and `is`. The aggressive `stutter-ambiguous-words` pass also collapses `that`, `had`, `do`, `can`, and `no`. Add a [repetition exception](configuration.md#preserving-repeated-words) to retain additional deliberate repeats handled by `stutter-safe-words`.
 
-Repeated `I` and `a` retain their existing treatment, including uppercase-I normalization. Repeated `is` collapses in normal mode. The aggressive profile additionally collapses `that`, `had`, `do`, `can`, and `no`; both profiles preserve punctuation-delimited forms such as `No, no`. Add a repetition exception, use punctuation, or disable the rule to retain other deliberate repetitions such as `tomato tomato`.
+Three passes cover partial starts and pronoun restarts. `stutter-i` collapses repeated `i` to `I`. `contracted-have-restart` handles starts such as `I've I already have`. `repeated-prefix-stutter` removes repeated letters or `sh`/`th`/`ch` starts before a matching word.
 
 ## Inspect And Test
 
-`rules list` shows every pass, its engine, tier, and activation for the selected options. `rules test` applies the configured threshold and reports each pass that changed its input; listing does not apply that threshold to text.
+`rules list` shows which passes are active and displays the engine and tier for each built-in pass. `rules test` prints the cleaned text and which rules changed it. Both commands work even with `cleaning.enabled = false`.
 
 ```bash
 parakit rules list
@@ -151,7 +188,7 @@ parakit rules test "um, the the G P T model is gonna work."
 parakit rules test "So, it's like, you know, hard." --profile aggressive
 ```
 
-The profile flag is `--profile` here and `--cleaning-profile` on `start`. Trailing-period and repeatable disable-rule flags work on both commands. To disable passes for a daemon run:
+Use `--profile` for previews and `--cleaning-profile` on `start`. Both accept the same trailing-period and repeatable disable-rule flags. This command disables two passes for a daemon run.
 
 ```bash
 parakit start \
@@ -159,41 +196,17 @@ parakit start \
   --disable-rule filled-pauses
 ```
 
-Set the same names persistently with [`cleaning.disabled_rules`](config_reference.toml). Both rules commands inspect or apply cleaning even when `cleaning.enabled = false`.
-
-Stutter handling is grouped by shape. Use `stutter-i` for repeated first-person pronouns, `stutter-safe-words` for whole-word restarts, `contracted-have-restart` for false starts such as `I've I already have`, `repeated-prefix-stutter` for repeated letters or `sh`/`th`/`ch` starts before a matching word, and `stutter-ambiguous-words` for the aggressive-only set.
+Set the same names persistently with [`cleaning.disabled_rules`](config_reference.toml).
 
 ## Rule Order
 
-Built-ins run in the order shown by `rules list`; user rules occupy their configured slots even though the command prints them together in a trailing `(user)` section. Each pass receives the previous pass's output. Aggressive discourse edits and filled-pause removal run first, then partial-word restarts, whole-word collapse, acronyms, and numbers. Thus `sh sh should` becomes `should`, and removing a pause in `twenty uh twenty layers` can create the year `2020`. The [numeric group](#numeric-controls-and-migration) reports hits in metadata order. Whitespace cleanup and capitalization run near the end, followed by terminal-period removal.
+Built-ins run in the order shown by `rules list`. Filled pauses and stutters are removed before acronyms and numeric expressions are recognized, so removing the pause in `twenty uh twenty layers` can produce `2020 layers`. Whitespace cleanup, capitalization, and final-period handling run near the end.
 
-A pass should be moved only with regression evidence. Reordering can change downstream matches even when every individual expression remains unchanged.
-
-## Choosing An Engine
-
-Use the standard `regex` engine for ordinary substitutions. It remains the default because its matching model is predictable and bounded.
-
-Use `fancy-regex` only when an advanced feature materially improves the implementation, as in the [bounded stutter rules](#casual-forms-and-stutters). Every `fancy-regex` pass sets an explicit backtrack limit. If matching exceeds it, the cleaner keeps the original transcript and records the failure instead of inserting partially transformed text.
-
-Use a procedural pass when correctness depends on token classes or longer context. Sentence capitalization, spaced-letter collapsing, multi-point version assembly, and identifier formatting are procedural because they enforce structural invariants that are clearer in Rust than in a monolithic expression.
-
-Every pass must have a stable name, explicit activation tier, tests, and rule-hit attribution. Reducing source declarations is useful only when observability and precision are preserved.
-
-## Adding A Built-In Rule
-
-Add an entry to `DEFAULT_RULES` in `src/rules/defaults.rs` using the `regex_rule!`, `fancy_rule!`, or `procedural_rule!` macro, and pick an activation tier: `Activation::Safe` for mechanical or high-confidence work, `Activation::Aggressive` for anything that can change meaning.
-
-The five numeric categories use raw `Rule` literals with `RuleKind::Numbers(NumberKind)`. Keep them contiguous so the engine can invoke their shared numeric core once with the enabled categories.
-
-Standard patterns and replacements use the same [Rust regex syntax documented for user rules](config_reference.toml); use the bounded `fancy-regex` path only when advanced matching is required.
-
-Increment `CLEANER_VERSION` whenever built-in behavior, rule identity, or ordering changes so historical logs continue to identify the cleaner that produced a transcript.
+The list groups custom rules and word replacements at the bottom. At runtime, [custom regex rules](#user-rules) run at their configured positions and [word replacements](#word-replacements) run last.
 
 ## User Rules
 
-For personal vocabulary or typing quirks, define rules in `config.toml` instead of editing Rust. User rules run alongside the built-ins and are not filtered by the profile.
-
-Run `parakit config init` to create a config file with a commented template, then add a `[[rules.user]]` table per rule:
+For phrases or more complex matching, add a `[[rules.user]]` table per regex rule.
 
 ```toml
 [[rules.user]]
@@ -202,26 +215,14 @@ pattern = "(?i)\\bweights and biases\\b"
 replacement = "wandb"
 ```
 
-The [reference](config_reference.toml) defines optional descriptions, validation, replacement syntax, and the exact splice points for `first`, `standard`, and `last`. The default `standard` position fits ordinary vocabulary substitutions.
-
-Disable user rules with the same [named-pass controls](#inspect-and-test) as built-in rules.
+The [reference](config_reference.toml) defines the regex syntax and the positions `first`, `standard`, and `last`. The default `standard` position fits ordinary vocabulary substitutions. Use the same [named controls](#inspect-and-test) to disable regex rules.
 
 ### Edit Rules Without Rebuilding
 
 Follow the [edit, validation, and restart workflow](configuration.md#validation-and-recovery). User rules need no Cargo build, model download, or conversion.
 
-A built-in rule can be replaced without rebuilding by listing its name in `cleaning.disabled_rules` and adding a differently named `[[rules.user]]` replacement. Runtime user rules deliberately use the standard Rust `regex` dialect. Context-sensitive procedural transforms such as number/version parsing and sentence capitalization remain Rust code unless they expose a specific config setting such as `cleaning.number_threshold`.
+A built-in rule can be replaced by disabling it and adding a differently named regex rule. Behavior such as numeric parsing and sentence capitalization is implemented by [built-in passes](dev/architecture.md#cleaner-rules).
 
 ## Regression Workflow
 
-When a cleanup worsens a transcript:
-
-1. Capture the raw ASR output.
-2. Reproduce with `parakit rules test "<raw text>"`.
-3. Disable candidate passes one at a time with `--disable-rule`.
-4. Fix the parsing or matching rule, checking related inputs that should remain unchanged.
-5. Add a case to the `rules` unit tests or `tests/cleaning_regressions.rs`.
-
-For historical JSONL replay, use [dev/quality.md#cleaning-corpus-replay](dev/quality.md#cleaning-corpus-replay).
-
-Avoid disabling broad rule categories to fix a narrow failure. If the failure is personal vocabulary rather than a general defect, add a user rule instead.
+Use [word replacements](#word-replacements) for personal vocabulary. To diagnose a built-in pass or test a fix with saved transcripts, follow the [cleaning regression workflow](dev/quality.md#cleaning-corpus-replay).

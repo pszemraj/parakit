@@ -249,6 +249,14 @@ fn print_config_show(quiet: bool) -> Result<()> {
     for user_rule in &config.rules.user {
         outln!("      {} ({})", user_rule.name, user_rule.position.as_str())?;
     }
+    outln!("  replacements:")?;
+    for (source, target) in &config.replacements {
+        outln!(
+            "    {source:?} -> {:?} (case sensitive: {})",
+            target.replacement(),
+            target.case_sensitive()
+        )?;
+    }
     Ok(())
 }
 

@@ -1,10 +1,10 @@
 # Native model validation
 
-Run this checklist on the checked-out commit under test on each available Mac and Windows laptop. Record the commit, OS, hardware, backend, command logs, and physical observations. Linux results do not establish Metal or Windows behavior. A missing device or an unperformed physical check stays pending.
+Run the matrix on each available native backend. Record the commit, OS, hardware, backend, command logs, and physical observations. Mark unavailable devices and unperformed physical checks as pending.
 
-Use a full checkout with initialized submodules. Supply the prepared fixture ZIP separately in the ignored checkout, and set the fixture ZIP variable below to its path. It must contain the named speech, resampling, boundary, silence, and noise fixtures used here, including public FLEURS clips and constructed controls. Preserve its README attribution. Keep downloaded models and test state inside the checkout.
+Initialize the submodules. Obtain `laptop-fixtures.zip` from the validation owner and place it under `target/tmp/new-models/`. The archive contains the speech, resampling, boundary, silence, and noise fixtures, including public FLEURS clips. Preserve its README attribution. Keep models and test state inside the checkout.
 
-TODO: provide an acquisition URL or construction recipe for `laptop-fixtures.zip`. The checkout does not include the bundle, so obtain it from the person coordinating native validation before running these matrices.
+TODO: Provide an acquisition URL or construction recipe for `laptop-fixtures.zip`.
 
 ## macOS CPU and Metal
 
@@ -32,9 +32,9 @@ unzip -o "$FIXTURE_ZIP" -d "$FIXTURES"
 "$BIN" --verbose doctor > target/tmp/new-models/macos/doctor.txt 2>&1
 ~~~
 
-Keep the cache root short enough for macOS's Unix-socket pathname limit. macOS places the control socket under `XDG_CACHE_HOME`, regardless of `XDG_RUNTIME_DIR`. The Metal cache override isolates the shader archive from the installed daemon's cache.
+Choose a short cache root for the [daemon control socket](../configuration.md#xdg_runtime_dir). The Metal cache override isolates the shader archive from the installed daemon's cache.
 
-Run both precisions for all six presets on CPU and Metal. Install a compatible `crispasr-quantize` on `PATH` first; see [source rebuild](README.md#source-rebuild). Start with the isolated empty model directory: Q6_K fetch downloads the preset's F16 file and invokes the local quantizer, so its first run records cold quantization. Keep each command's output and exit status.
+Run both precisions for all six presets on CPU and Metal. Start with an empty isolated model directory to exercise cold Q6_K preparation. The matrix saves each command's output and exit status. [Quantizer installation](README.md#source-rebuild)
 
 ~~~bash
 PRESETS=(parakeet-v2 parakeet-v3 parakeet-ultra parakeet-redux qwen3-asr-0.6b qwen3-asr-1.7b)
@@ -92,7 +92,7 @@ $Backends = @("cpu") # Add vulkan or cuda only when its SDK and supported device
 foreach ($Backend in $Backends) { .\scripts\windows\build.ps1 --backend $Backend --no-install }
 ~~~
 
-For each backend, extract a fresh bundle, add its DLL directory to PATH for the test process, and build its matching WAV helper. Windows Q6_K generation requires a compatible crispasr-quantize.exe on PATH; see [model presets](../running.md#model-presets). The script records the matrix and [Qwen sequence](#qwen-options-long-input-and-reload) separately for each backend.
+For each backend, extract a fresh bundle, add its DLL directory to the process PATH, and build its matching WAV helper. The script records the matrix and [Qwen sequence](#qwen-options-long-input-and-reload) separately for each backend. [Quantizer installation](README.md#source-rebuild)
 
 ~~~powershell
 $Fixtures = Join-Path $PWD "target\tmp\new-models\fixtures"
@@ -157,28 +157,26 @@ Keep the isolated `CARGO_HOME` short too: Cargo nests Git checkouts and submodul
 
 - Install from Git and from a populated local checkout with `cargo install --locked`, using the backend's toolchain and features. Unset `CRISPASR_LIB_DIR` and `CRISPASR_SRC_DIR` for the bundled case. Record the source revision, Cargo installation metadata, commands, and exit statuses. Cargo installs executables only; retain required external BLAS/CUDA runtimes on the test process's PATH, or validate their packaging through the bundle route separately.
 - Move each install prefix to a path containing spaces. From outside the disposable checkout, with test processes stopped, temporarily rename its original source checkout, Cargo home, and build directories, restoring them afterward. Remove those build/bundle directories and explicit CrispASR library overrides from the test environment while retaining approved system/toolkit runtime paths. Inspect direct and transitive PE dependencies: bundled inference must not import CrispASR/ggml DLLs or resolve dependencies from hidden build paths.
-- Invoke the relocated executable by its full path for `--version`, hosted fetching, and the real WAV worker simulation; its version must match the tested checkout's `Cargo.toml`. Record native backend/device diagnostics and JSONL `inference.session_device`, which records the session-opening policy. Corroborate GPU execution with native execution diagnostics or per-process GPU engine activity. A CPU-only build must reject an explicit GPU request. Verify the pinned Juniper transcript, quiet stdout/stderr, skipped simulation insertion records, and unchanged history after rejected nonspeech. Complete [cleaned worker parity](quality.md#cleaned-worker-parity) with that executable on each backend as well as the raw model matrix.
+- Invoke the relocated executable by its full path. Check that `--version` agrees with the tested checkout's `Cargo.toml`, run hosted fetching, and run the [pinned WAV simulation](quality.md#ptt-worker-simulation) and [cleaned worker parity](quality.md#cleaned-worker-parity). Confirm that rejected nonspeech leaves history unchanged. Record device diagnostics and JSONL `inference.session_device`. Corroborate GPU execution with native diagnostics or per-process GPU engine activity. A CPU-only build must reject an explicit GPU request.
 - Exercise cold hosted Q8_0 acquisition without Python/conversion tools on PATH, preserving required runtime DLL paths. Cold Q6_K preparation requires the separately installed quantizer. Then make the endpoint unavailable and remove conversion tools from the process PATH: completed Q6_K and `--from-source` caches must remain usable without new downloads or preparation.
 - Compare the isolated model directory before and after the Rust suite and acquisition checks. The Rust suite and failed preparation must preserve existing cached artifacts; test fixtures must stay in their private directories. Successful acquisition must leave no partial-download or quantization staging files. Read back the installed executable's `cache list`; an empty or unknown mock GGUF entry is not a prepared model.
 - Reinstall into the relocated Cargo root, confirm replacement by invoking the resulting executable, then uninstall and verify that Cargo's installation list and executable paths are clear. For [bundle installation](../../scripts/windows/README.md#install-an-existing-bundle), pass `-InstallDir` and `-NoUserPath` to `install.ps1` with the test prefix; check manifest files, removal of stale backend DLLs on upgrade, and preservation of the previous test installation after a failed replacement.
-
-Mac/Linux results do not complete this Windows acceptance. Keep physical hotkey, microphone, clipboard, and receiving-application checks separate from unattended worker simulation.
 
 ## Qwen options, long input, and reload
 
 Use the language, token, and chunking controls described in the [Qwen3-ASR guide](../models/qwen3-asr.md). Keep Qwen attention overrides unset for acceptance; the default and diagnostic alternatives are described in the [Qwen comparison procedure](quality.md#qwen-and-moondream-comparisons).
 
-The platform matrices above run both Qwen sizes and precisions through short/270-second/short inputs at forced English and a 4096-token budget, then two simulated captures with a 63-second idle wait and a one-minute offload setting. Check option restoration and reload state independently of recognition. The long fixture repeats public JFK speech for long-input/memory stress, not natural long-form quality. Inspect its clipped final phrase separately, retaining any differing completions for comparison with the waveform/reference while checking short-input parity.
+The short/270-second/short sequence uses forced English and a 4096-token budget. Check option restoration and reload state independently of recognition. The long fixture repeats public JFK speech for memory and chunk-boundary stress. Compare its clipped ending with the waveform and reference. Check short-input parity separately.
 
 Also record default auto/512, forced German on `fleurs-de_de-0.wav`, and forced English on `fleurs-en_us-422.wav` (containing the spoken word "language"). Use a budget of 1 for a separate failure-path check: readiness should complete, while actual transcription fails without a successful JSONL row or history entry.
 
-Run the [ordered-audio checks](quality.md#ordered-audio) on supported native hosts, then the [physical shortcut checks](quality.md#runtime-smoke-checks) with Qwen and Parakeet. Compare prior-context quality separately from ordinary repeat/reload invariance, using the [context configuration](../models/qwen3-asr.md#prior-dictation-context).
+Run the [ordered-audio checks](quality.md#ordered-audio) on native hosts. Evaluate ordinary reload parity and [prior-dictation context](../models/qwen3-asr.md#prior-dictation-context) separately.
 
 For every preset and precision, also check representative longer speech, silence, repeats, and idle offload/reload through the helper and worker. Use the 29/30/31-second boundary fixtures for both Qwen sizes. Save exit statuses alongside output for each additional command, as in the matrix. A worker no-speech error is expected for silence; it must not become a successful transcript or insertion. Repeat completed Q6 acquisition with network access disabled and the F16/quantizer unavailable to confirm cached startup needs neither. On Windows, separately record the first-generation result with the external quantizer available.
 
 Follow the [memory measurement procedure](memory.md#measuring-memory) on each native backend; Linux calibration does not establish Metal or Windows allocation behavior.
 
-silence.wav and noise-only.wav are synthetic controls; inspect unwanted insertion/history changes without treating them as room-noise evidence or adding a new voice-activity/rejection policy. quiet-rms26-complete.wav, quiet-rms26-complete-lowgain.wav, human-speech-noise-tail.wav, and quiet-loud-quiet.wav are controlled diagnostics documented in the fixture README. Compare expected opening/closing phrases and tail behavior, then listen when output disagrees. Constructed noise is not real ambient sound.
+Use `silence.wav` and `noise-only.wav` as synthetic controls for unwanted insertion and history changes. For `quiet-rms26-complete.wav`, `quiet-rms26-complete-lowgain.wav`, `human-speech-noise-tail.wav`, and `quiet-loud-quiet.wav`, use the fixture README to check expected opening and closing phrases and tail behavior. Listen when the transcripts disagree.
 
 ## Physical desktop checks
 
@@ -186,7 +184,7 @@ Use isolated configuration for the tested preset, precision, device, and Qwen op
 
 1. Dictate a sentence with a negation, number, and the word language. Confirm one insertion, inspect the transcript, and repeat with normal cleaning enabled.
 2. Stop and restart the isolated daemon without CLI overrides; confirm saved selection and Qwen options persist.
-3. Record real quiet speech and nonspeech in a room with fan, keyboard, breathing, or microphone handling sounds, paired with quiet and breathless speech. Record the environment and listen to disagreements. These real-world recordings remain pending until performed; do not add or assume a new VAD/rejection rule.
+3. Record quiet speech, breathless speech, and nonspeech with real fan, keyboard, breathing, or microphone handling sounds. Record the environment and listen to disagreements. Do not add or assume a new VAD or rejection rule from these checks.
 
 Check status, history, logs, and inserted text after each run. Mark each item pass, fail, or pending with evidence. Listen to the actual recordings to adjudicate recognition; follow the [reference comparison procedure](quality.md#recommended-ab-procedure) when outputs disagree. VRAM-pressure tests and physical stop-to-insert p50/p95 measurements are separate runs.
 

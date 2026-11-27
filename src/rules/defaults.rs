@@ -21,6 +21,9 @@ use super::passes::{
     capitalize_sentence_starts, drop_dangling_connective, normalize_apostrophe_cause,
     normalize_spaced_acronyms,
 };
+use super::phrase_breaks::{
+    merge_sentence_breaks, remove_filled_pauses, remove_function_word_commas,
+};
 
 macro_rules! regex_rule {
     ($name:expr, $description:expr, $activation:expr, $pattern:expr, $replacement:expr) => {
@@ -106,17 +109,23 @@ pub(crate) const DEFAULT_RULES: &[Rule] = &[
         r#"(?i)(?:\b((?:as\s+in)|(?:(?:it'?s|that'?s|there'?s|here'?s|is|was|are|were|am|be|been|being|and|but|or|so)(?:\s+(?:actually|basically|literally))?))\s+|,\s*)like\s+([A-Za-z0-9][A-Za-z0-9'-]*)\b"#,
         "$1 $2"
     ),
-    // High-confidence filled pauses. The first branch removes a filler-only
-    // sentence such as "Um." or "Uh, um." together with its terminator, so no
-    // orphaned punctuation is left after the previous sentence end. It keeps
-    // that boundary in $1; the second branch leaves $1 empty. Punctuation
-    // that no filler produced, such as a spaced "? !", is never touched here.
-    regex_rule!(
+    procedural_rule!(
         "filled-pauses",
-        "Remove standalone um/uh/erm variants, filler-only sentences, and adjacent commas",
+        "Remove filled pauses, and their punctuation after an unfinished phrase",
         Activation::Safe,
-        r#"(^|[.!?])(?:\s*\b(?i:u[hm]+|er+m+)\b(?:,?\s+\b(?i:u[hm]+|er+m+)\b)*[.!?]+)+|,?\s*\b(?i:u[hm]+|er+m+)\b\s*,?"#,
-        "$1 "
+        remove_filled_pauses
+    ),
+    procedural_rule!(
+        "merge-sentence-breaks",
+        "Merge periods and question marks inside a phrase or relative clause",
+        Activation::Safe,
+        merge_sentence_breaks
+    ),
+    procedural_rule!(
+        "function-word-commas",
+        "Remove commas after function words inside a phrase",
+        Activation::Safe,
+        remove_function_word_commas
     ),
     // Partial starts run before whole-word collapse: `sh sh should` must not
     // first turn into `sh should`, which is no longer a repeated-prefix run.

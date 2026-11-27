@@ -1,88 +1,51 @@
 # Build
 
-Parakit is a Rust application that links to the vendored [CrispASR](https://github.com/CrispStrobe/CrispASR) submodule. The default build is CPU-only and may use detected CPU BLAS libraries.
-
-Command examples use a POSIX shell unless the surrounding section is Windows-specific. Windows-only commands are shown as `bat` or `powershell`.
-
-Install Rust via [rustup](https://rustup.rs) if you do not already have a toolchain; parakit requires Rust 1.87 or newer (`rust-version` in `Cargo.toml`).
+Parakit requires Rust 1.87 or newer and builds for CPU by default. Get Rust from [rustup](https://rustup.rs).
 
 ## Native Dependencies
 
-Cargo handles Rust packages. System packages are still needed for audio, IBus input, X11/XTest fallback insertion, CMake, and optional accelerator SDKs.
-
-CMake 3.19 or newer is required for bundled builds.
+Bundled builds require CMake 3.19 or newer and the packages for your platform.
 
 | OS | Packages |
 | --- | --- |
 | Ubuntu 24.04 | `cmake build-essential libasound2-dev libibus-1.0-dev libxtst-dev libxi-dev libx11-dev libxkbcommon-dev libevdev-dev libxdo-dev libgomp1 pkg-config` |
-| Fedora | `cmake gcc-c++ alsa-lib-devel ibus-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel xdotool-devel pkgconf` |
+| Fedora | `cmake gcc-c++ alsa-lib-devel ibus-devel libXtst-devel libXi-devel libX11-devel libxkbcommon-devel libevdev-devel libxdo-devel pkgconf-pkg-config` |
 | Arch | `cmake base-devel alsa-lib ibus libxtst libxi libx11 libxkbcommon libevdev xdotool pkgconf` |
 | Windows | See the [Windows backend requirements](../scripts/windows/README.md#backend-requirements). |
-| macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. |
+| macOS | Apple Silicon with Xcode command line tools plus `cmake pkg-config`. Install `libomp` if you want OpenMP support. |
 
 CUDA builds need the CUDA Toolkit with `nvcc` on `PATH`.
 
-Vulkan builds on Ubuntu/Debian need:
+For Vulkan on Ubuntu/Debian, install the SDK, shader tools, and driver packages. `spirv-headers` supplies `spirv/unified1/spirv.hpp`.
 
 ```bash
 sudo apt install libvulkan-dev vulkan-tools glslc spirv-tools spirv-headers mesa-vulkan-drivers
 ```
 
-`spirv-headers` provides `spirv/unified1/spirv.hpp`; it is not the same package as `spirv-tools`.
-
 ## Install
 
-On Linux and Apple Silicon macOS, install directly from Git after installing the native dependencies above:
+After installing the native dependencies, use the [Git install commands](../README.md#install) on Linux or macOS. Build from a native arm64 terminal on macOS with target `aarch64-apple-darwin`. Rosetta can hide the Metal backend from ggml.
 
-```bash
-cargo install --locked --git https://github.com/pszemraj/parakit.git parakit
-```
-
-On Apple Silicon, add `--features metal` to enable GPU inference:
-
-```bash
-cargo install --locked --git https://github.com/pszemraj/parakit.git parakit --features metal
-```
-
-For a local checkout, initialize its submodules before installing:
+If you already have a checkout, initialize the submodule and install from it. Use a Git checkout or an archive that includes `vendor/CrispASR` because GitHub's generated source archives omit submodules.
 
 ```bash
 git submodule update --init --recursive
 cargo install --locked --path .
 ```
 
-This installs the release build to Cargo's bin directory, usually `~/.cargo/bin`, using the committed `Cargo.lock`. Default Linux features install and update two executables together:
+Add the same accelerator feature flag for a local GPU build. Cargo installs the release build to its bin directory, usually `~/.cargo/bin`. Default Linux builds install both `parakit` and `parakit-ibus` and require the IBus development package even when you use X11. See [IBus setup and upgrades](linux-desktop.md#ibus-setup).
 
-- `parakit`: the CLI and dictation daemon.
-- `parakit-ibus`: the input-method helper; see [automatic startup and upgrades](linux-desktop.md#ibus-setup).
-
-Linux builds enable IBus by default, including when adding `--features cuda`. The IBus development package in the [native dependency table](#native-dependencies) is required even when upgrading an existing X11 installation. Follow the [IBus setup](linux-desktop.md#ibus-setup) when choosing native input. To build an X11-only daemon without IBus support:
+For an X11-only build, select the daemon and bundled runtime features explicitly. You can also enable CUDA or Vulkan. This build has no IBus support, so it cannot do native GNOME Wayland dictation.
 
 ```bash
 cargo install --locked --path . --no-default-features --features bundled,daemon
 ```
 
-That build retains X11 clipboard paste and direct typing, and cannot provide native GNOME Wayland dictation. Add `--features cuda` or `--features vulkan` when the corresponding accelerator is wanted.
-
-Install behavior:
-
-- [Bundled builds](#crispasr-and-backends) produce executables that do not need the checkout, Cargo Git cache, or native build directory. Custom `--root` installations can be moved together with their `bin` directory.
-- Native OS libraries and selected BLAS, OpenMP, GPU runtimes, and drivers remain prerequisites. On Windows, the [bundle procedure](../scripts/windows/README.md) can package optional runtime DLLs.
-- Q6_K preparation and source rebuilding require [separately installed tools](dev/README.md#source-rebuild). Hosted Q8_0 downloads and dictation do not use them.
-- GitHub auto-generated source archives are unsupported because they do not include the CrispASR submodule.
-
-Optional accelerator builds:
-
-```bash
-cargo install --locked --path . --features cuda
-cargo install --locked --path . --features vulkan
-```
-
-For a local Metal build, use `cargo install --locked --path . --features metal`. On macOS, `aarch64-apple-darwin` is the supported target. Build from a native arm64 terminal; an x86_64/Rosetta build may not expose the Metal backend to ggml.
+Move bundled executables with their `bin` directory, including installs created with `--root`. Native OS libraries, selected BLAS and OpenMP libraries, and GPU runtimes and drivers must be available on the destination. See [Windows runtime bundling](../scripts/windows/README.md#runtime-manifest) and [model preparation tools](dev/README.md#source-rebuild).
 
 ## Isolated Development Builds
 
-Use `cargo build` with a separate [Cargo target directory](https://doc.rust-lang.org/cargo/reference/build-cache.html) when validating changes alongside an installed daemon. Build both the daemon and WAV helper, then invoke those binaries by path:
+Use a separate Cargo target directory when validating changes alongside an installed daemon. Invoke the test binaries by path.
 
 ```bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo"
@@ -90,13 +53,13 @@ cargo build --locked --bin parakit --example transcribe-file
 "$CARGO_TARGET_DIR/debug/parakit" --version
 ```
 
-For Linux IBus validation, also build the sibling engine in the same target directory:
+For Linux IBus validation, also build the helper in the same directory.
 
 ```bash
 cargo build --locked --bin parakit-ibus
 ```
 
-For Linux CUDA/Vulkan validation, use a separate GPU directory. This RTX 5090 example requires a CUDA Toolkit that supports architecture 120:
+Keep accelerator builds in a separate target directory. This RTX 5090 example requires a CUDA Toolkit that supports architecture 120.
 
 ```bash
 export CARGO_TARGET_DIR="$PWD/target/tmp/validation/cargo-gpu"
@@ -104,15 +67,11 @@ export PARAKIT_CUDA_ARCHS=120-real
 cargo build --locked --features cuda,vulkan --bin parakit --bin parakit-ibus --example transcribe-file
 ```
 
-Use the architecture supported by your GPU and toolkit. Reuse the same directory, feature set, profile, and native build settings for subsequent builds. Changing them can require another native compile; `cargo check` does not produce the runnable binaries. An existing directory built with `--all-features` should keep that feature set when rebuilding; Linux intentionally ignores the unsupported Metal feature.
-
-These builds do not install a binary or restart a running daemon. Verify [runtime library paths](#runtime-library-paths), substituting the isolated binary path for `$(command -v parakit)`, then follow the [Linux GPU procedure](dev/quality.md#linux-cudavulkan) for isolated configuration and model state.
+Set the architecture for your GPU and reuse the same profile, feature set, and native settings in each target directory to avoid recompiling C/C++. An existing directory built with `--all-features` should keep that feature set when rebuilding. On a non-Apple target, a multi-backend build such as `--all-features` ignores the `metal` feature and prints `ignoring unsupported metal feature on non-Apple target during multi-backend build`; this is intentional. Substitute the isolated executable when checking [runtime library paths](#runtime-library-paths). See [Linux GPU validation](dev/quality.md#linux-cudavulkan) for isolated runtime state.
 
 ## CPU Builds
 
-The bundled CMake path enables ggml native CPU code, OpenMP, and CPU repacking. On Linux with GCC or Clang this usually means `-march=native` for the local machine.
-
-Inspect the compiled flags:
+The bundled build enables ggml native CPU code, OpenMP when available, and CPU repacking. With GCC or Clang on Linux, `-march=native` specializes code for the build machine's CPU. Check the flags before moving a binary to a different machine.
 
 ```bash
 parakit --verbose doctor
@@ -122,10 +81,9 @@ Benchmark different thread counts with the daemon-free [WAV quality target](dev/
 
 ## BLAS And MKL
 
-The build defaults to `PARAKIT_BLAS=auto`. If no supported BLAS is detected, parakit uses native ggml CPU kernels. BLAS/MKL can help some matrix paths but adds system-library dependencies. Values are trimmed and case-insensitive; an explicitly empty value disables BLAS, while an unset value selects `auto`.
+`PARAKIT_BLAS` selects a build-time CPU matrix library. Values are trimmed and case-insensitive.
 
 ```bash
-PARAKIT_BLAS=openblas cargo install --locked --path .
 PARAKIT_BLAS=mkl cargo install --locked --path .
 PARAKIT_BLAS=generic cargo install --locked --path .
 ```
@@ -134,7 +92,7 @@ Supported values:
 
 | Value | Behavior |
 | --- | --- |
-| unset, `auto` | Apple Accelerate on macOS. Windows searches configured and conventional OpenBLAS prefixes, otherwise disables BLAS. Linux honors configured OpenBLAS prefixes, then tries MKL and OpenBLAS through pkg-config, then checks conventional system prefixes. |
+| unset, `auto` | macOS uses Accelerate. Windows checks OpenBLAS prefixes. Linux checks configured OpenBLAS prefixes, then pkg-config for MKL and OpenBLAS, then conventional OpenBLAS prefixes. Linux and Windows use native ggml kernels if no compatible library is found. |
 | empty, `off`, `none`, `no`, `false`, `0` | Native/OpenMP CPU kernels without BLAS. |
 | `openblas` | `GGML_BLAS=ON`, `GGML_BLAS_VENDOR=OpenBLAS`. |
 | `mkl`, `intel`, `intel-mkl` | CrispASR `COHERE_MKL=ON`, ggml `Intel10_64lp`. |
@@ -143,61 +101,53 @@ Supported values:
 
 Windows OpenBLAS layout and bundling behavior are in the [Windows build guide](../scripts/windows/README.md#blas).
 
-Ubuntu/Debian OpenBLAS:
+Choose OpenBLAS on Ubuntu/Debian with the development package installed.
 
 ```bash
 sudo apt install libopenblas-dev
 PARAKIT_BLAS=openblas cargo install --locked --path .
 ```
 
-Linux and Windows OpenBLAS prefix detection recognizes `PARAKIT_OPENBLAS_ROOT`, `OPENBLAS_ROOT`, `OpenBLAS_ROOT`, `OPENBLAS_HOME`, active Conda environments, `CMAKE_PREFIX_PATH`, and vcpkg installs; Linux also checks `HOMEBREW_PREFIX`. It also checks common Conda and native installation prefixes on Windows and `/usr/local`, `/usr`, `/opt/openblas`, and `/opt/OpenBLAS` on Linux. Explicit `BLAS_INCLUDE_DIRS` plus `BLAS_LIBRARIES` remain the final manual override.
+Set `PARAKIT_OPENBLAS_ROOT` to point at a custom OpenBLAS prefix. Linux and Windows also check `OPENBLAS_ROOT`, `OpenBLAS_ROOT`, `OPENBLAS_HOME`, `CMAKE_PREFIX_PATH`, `CONDA_PREFIX`, and vcpkg prefixes. Linux checks `HOMEBREW_PREFIX` and standard system prefixes. Set both `BLAS_INCLUDE_DIRS` and `BLAS_LIBRARIES` to supply paths manually. See [the list of conventional prefixes](../build/openblas_roots.rs).
 
-Explicit `PARAKIT_BLAS` builds print the requested and selected modes as a Cargo warning, and `parakit --verbose doctor` reports the selected mode on its `cpu:` line.
+When `PARAKIT_BLAS` is set, Cargo reports the requested and selected modes. The `cpu:` line in `parakit --verbose doctor` reports the selected mode.
 
 ## CrispASR And Backends
 
-The repository vendors [CrispASR v0.8.49](https://github.com/CrispStrobe/CrispASR/tree/d94264379dada437aa4ea9163eb34ffe4554422a) at `d94264379dada437aa4ea9163eb34ffe4554422a` as a git submodule. Small manifests under `native/` compile its Rust binding sources unchanged, without upstream build scripts. Parakit's `build.rs` owns the single native build, including Git installs that do not discover local Cargo configuration. It asks CMake's File API for a consumer target's complete archive and runtime dependencies, then bundles the archives into Parakit's Rust library. The standalone IBus helper does not link this library.
+The bundled build links CrispASR and ggml statically, so the executable can run outside the checkout or Cargo build directory. Parakit's [build script](../build.rs) obtains archives and runtime dependencies from CMake's File API. The [native manifests](../native) compile the Rust bindings from the submodule. The IBus helper builds separately from the inference runtime. See the pinned [CrispASR v0.8.49 source](https://github.com/CrispStrobe/CrispASR/tree/d94264379dada437aa4ea9163eb34ffe4554422a).
 
-The bundled build compiles patched copies of CrispASR's session and Parakeet orchestration sources under Cargo's `OUT_DIR`; it leaves the submodule unchanged. The patches make chunk failures fail the whole utterance, require Qwen decoding to reach EOS, and restrict language-metadata parsing to the output header. Qwen's energy filter also retains recoverable quiet clauses around louder speech. The orchestration copy removes the informational gap-recovery notice while preserving warnings, including the streamed-encoding fallback after an allocation failure. A deferred CMake hook substitutes these two translation units.
+The [native build hook](../build/native_correctness.cmake) substitutes patched session and orchestration sources generated under Cargo's `OUT_DIR`. The patches reject partial utterances on chunk failure, require Qwen to reach EOS, restrict language-metadata parsing to the output header, and retain recoverable quiet clauses around louder speech. Gap recovery stays quiet while native warnings such as the streamed-encoding fallback remain visible.
 
-`CRISPASR_LIB_DIR` is for advanced local experiments with an already-built compatible CrispASR tree. The library must match the pinned C ABI, including `crispasr_session_open_with_params`. Bundled builds must also provide compatible ggml libraries with the exported device registry entry points used by `parakit doctor` and `--device gpu` preflight. Parakit compiles its device-query adapter against the selected native source headers, including when `CRISPASR_LIB_DIR` skips native compilation; those headers must match the supplied libraries.
+`CRISPASR_LIB_DIR` selects prebuilt shared libraries and skips the bundled source patches. Match the pinned C ABI, including `crispasr_session_open_with_params`. With the `bundled` feature, supply matching ggml headers and libraries exporting the device registry used by `doctor` and GPU preflight. For Qwen, the external library also needs the language and token setters, equivalent correctness fixes, and free-form context routing through `CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT=1`.
 
-External libraries must also supply the Qwen language/token setters, free-form context routing through `CRISPASR_QWEN3_HOTWORDS_AS_CONTEXT=1`, and equivalent native correctness fixes before using Qwen. Selecting an external library skips the bundled source patches; the bundled build is the initial Qwen acceptance target.
+`CRISPASR_SRC_DIR` selects a native source tree containing `CMakeLists.txt`. It must match the pinned ABI and provide the source anchors used by the corrections. The Rust bindings still come from the submodule.
 
-`CRISPASR_SRC_DIR` is an optional path to another CrispASR source tree containing `CMakeLists.txt`; by default, the bundled CMake build uses the vendored tree. An alternative tree must remain ABI-compatible with the vendored Rust crates and retain the reviewed source anchors used by the bundled correctness patches. This override changes native sources and headers only, not the Rust path dependencies. It cannot replace a missing submodule because Cargo resolves those path dependencies before `build.rs` runs.
+For CUDA builds, set `PARAKIT_CUDA_ARCHS` to override ggml's native architecture selection. It passes a nonblank value to `CMAKE_CUDA_ARCHITECTURES` and accepts values such as `89-real` or semicolon-separated lists.
 
-For CUDA builds, `PARAKIT_CUDA_ARCHS` is trimmed and, when nonempty, passed as `CMAKE_CUDA_ARCHITECTURES`; omission or a blank value keeps ggml's native selection. CMake accepts values such as `89-real` and semicolon-separated architecture lists.
-
-Feature mapping:
+Cargo features set the corresponding CMake options.
 
 | Cargo feature | CMake option |
 | --- | --- |
-| `cuda` | `GGML_CUDA=ON` |
+| `cuda` | `GGML_CUDA=ON`, `GGML_CUDA_NCCL=OFF` |
 | `vulkan` | `GGML_VULKAN=ON` |
 | `metal` | `GGML_METAL=ON`, `GGML_METAL_EMBED_LIBRARY=ON` |
 
-CUDA builds also force `GGML_CUDA_NCCL=OFF`.
-
-Metal builds embed the shader source into the static Metal backend, so there is no loose `default.metallib` to carry with the binary. The first GPU use still pays normal Metal runtime compilation/warmup cost.
-
-On macOS, `libomp` is optional; ggml's OpenMP path degrades when OpenMP is not available, and Metal handles GPU offload separately.
+Metal builds embed shader source in the binary. Metal compiles it at runtime on first GPU use.
 
 ## Runtime Library Paths
 
-Bundled builds must not load CrispASR or ggml from a build directory. On Linux, inspect the installed executable:
+On Linux, inspect the installed executable's shared dependencies and loader paths.
 
 ```bash
 ldd "$(command -v parakit)"
 readelf -d "$(command -v parakit)" | grep -E "NEEDED|RPATH|RUNPATH"
 ```
 
-There should be no CrispASR/ggml shared dependencies or RPATH/RUNPATH entries into the checkout or Cargo build output. System libraries such as OpenBLAS and OpenMP are expected when selected.
-
-On macOS, inspect the installed executable and its loader paths:
+On macOS, use `otool`.
 
 ```bash
 otool -L "$(command -v parakit)"
 otool -l "$(command -v parakit)" | grep -A2 LC_RPATH
 ```
 
-Apple frameworks and separately installed runtimes are expected; build-directory CrispASR/ggml dylibs are not. Explicit external-library builds retain their dynamic-library search paths. See [macOS CPU and Metal validation](dev/model-validation.md#macos-cpu-and-metal) for native checks.
+For a bundled build, expect system libraries, Apple frameworks on macOS, and selected external runtimes. CrispASR/ggml shared libraries and paths into the checkout or Cargo output indicate an unexpected dependency. Builds using `CRISPASR_LIB_DIR` retain the external-library search path.

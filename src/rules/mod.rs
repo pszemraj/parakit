@@ -31,6 +31,7 @@
 //! * [`stutters`] - repeated-word collapsing and configured exceptions.
 //! * [`passes`] - other procedural transforms, including acronyms and
 //!   capitalization.
+//! * [`phrase_breaks`] - punctuation repair around function words and filled pauses.
 //! * [`user`] - user-defined rules loaded from `config.toml`.
 //!
 //! ## How to disable a rule at runtime
@@ -63,6 +64,7 @@ mod number_versions;
 mod number_words;
 mod numbers;
 mod passes;
+mod phrase_breaks;
 mod stutters;
 #[cfg(test)]
 mod tests;
@@ -73,7 +75,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 47;
+pub const CLEANER_VERSION: u32 = 74;
 
 /// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.

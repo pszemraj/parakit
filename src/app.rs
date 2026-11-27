@@ -195,7 +195,7 @@ fn run_rules_command(cli: &Cli, rules_cli: &RulesCli) -> Result<()> {
                 args.cleaning_overrides
                     .effective_drops_trailing_period(&config),
                 &args.cleaning_overrides.effective_disabled_rules(&config),
-                &config.rules.user,
+                &config.effective_user_rules()?,
                 cli.quiet,
             )?;
             Ok(())
@@ -717,7 +717,7 @@ fn build_cli_cleaner(start: &StartCli, config: &ConfigFile) -> Result<Option<rul
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
         &start.cleaning_overrides.effective_disabled_rules(config),
-        &config.rules.user,
+        &config.effective_user_rules()?,
     )
 }
 
@@ -733,7 +733,7 @@ fn build_rules_cleaner(args: &RulesArgs, config: &ConfigFile) -> Result<rules::C
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
         &args.cleaning_overrides.effective_disabled_rules(config),
-        &config.rules.user,
+        &config.effective_user_rules()?,
     )
 }
 

@@ -15,12 +15,13 @@
 //! `show` (the default subcommand) loads and validates the file and so
 //! fails with a diagnostic naming the config path.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use parakit::inference::DeviceMode;
 use parakit::model::{ModelPreset, ModelQuantization};
 use parakit::qwen::QwenOptions;
 use parakit::rules::{CleaningProfile, UserRule};
 use serde::Deserialize;
+use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,77 @@ pub(crate) struct ConfigFile {
     pub(crate) hotkey: HotkeyConfig,
     pub(crate) rules: RulesConfig,
     pub(crate) qwen: QwenConfig,
+    /// Whole-word corrections with literal text and optional case sensitivity.
+    pub(crate) replacements: BTreeMap<String, WordReplacement>,
+}
+
+/// A simple correction or an inline table with explicit matching options.
+#[derive(Debug, Deserialize)]
+#[serde(
+    untagged,
+    deny_unknown_fields,
+    expecting = "a string or { replacement = \"...\", case_sensitive = bool }"
+)]
+pub(crate) enum WordReplacement {
+    /// Literal replacement text, matched without regard to case.
+    Text(String),
+    /// Literal replacement text with optional case-sensitive matching.
+    Options {
+        /// Literal output text.
+        replacement: String,
+        /// Require the source word's exact capitalization; defaults to false.
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+}
+
+impl WordReplacement {
+    /// # Returns
+    /// Literal output text, preserving its configured capitalization.
+    pub(crate) fn replacement(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Options { replacement, .. } => replacement,
+        }
+    }
+
+    /// # Returns
+    /// Whether matching requires the source word's exact capitalization; defaults to false.
+    pub(crate) fn case_sensitive(&self) -> bool {
+        match self {
+            Self::Text(_) => false,
+            Self::Options { case_sensitive, .. } => *case_sensitive,
+        }
+    }
+}
+
+impl ConfigFile {
+    /// Combine regex rules with literal word corrections in their application order.
+    ///
+    /// # Returns
+    /// User rules followed by word corrections, which apply together after all other cleaning.
+    ///
+    /// # Errors
+    /// Returns an error when a replacement key is not one nonempty word, its replacement is blank,
+    /// or two keys differ only in case.
+    pub(crate) fn effective_user_rules(&self) -> Result<Vec<UserRule>> {
+        // Generated rule names are lowercase, so such keys would share one name.
+        let mut lowered: HashMap<String, &str> = HashMap::new();
+        for source in self.replacements.keys() {
+            if let Some(other) = lowered.insert(source.to_lowercase(), source) {
+                bail!("replacements keys {other:?} and {source:?} differ only in case; keep one");
+            }
+        }
+        let mut rules = self.rules.user.clone();
+        for (source, target) in &self.replacements {
+            rules.push(UserRule::word_replacement(
+                source,
+                target.replacement(),
+                target.case_sensitive(),
+            )?);
+        }
+        Ok(rules)
+    }
 }
 
 /// `[daemon]` section: daemon runtime defaults.
@@ -454,6 +526,12 @@ pub(crate) const TEMPLATE: &str = r#"# parakit config.toml
 # pattern = "(?i)\\bweights and biases\\b"
 # replacement = "wandb"
 # position = "standard"  # "first", "standard" (default), or "last"
+
+# Whole-word corrections, case insensitive by default. Output is literal and retains its case.
+# Applied in key order after all other cleaning and user rules. No regular expressions needed.
+[replacements]
+# quan = "Qwen"
+# rust = { replacement = "Rust", case_sensitive = true }
 "#;
 
 /// Return the resolved config file path.
@@ -634,7 +712,9 @@ pub(crate) fn load_from_path(path: &Path) -> Result<ConfigFile> {
         config.cleaning.number_threshold,
         &config.cleaning.repetition_exceptions,
         &config.cleaning.disabled_rules,
-        &config.rules.user,
+        &config
+            .effective_user_rules()
+            .with_context(|| format!("invalid config in {}", path.display()))?,
     )
     .with_context(|| format!("invalid config in {}", path.display()))?;
     Ok(config)

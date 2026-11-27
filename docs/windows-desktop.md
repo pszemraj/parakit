@@ -1,12 +1,8 @@
 # Windows Desktop Setup
 
-parakit runs from a Windows terminal and installs as a per-user bundle. Its hotkey and insertion APIs do not require macOS-style Accessibility or Input Monitoring grants. Microphone access still depends on Windows privacy settings.
-
 ## Build
 
-Build and install with the [Windows bundle scripts](../scripts/windows/README.md), or [install an existing bundle](../scripts/windows/README.md#install-an-existing-bundle). The script guide lists native toolchain and backend requirements. After installation, follow [first run](running.md#first-run) from a native Windows terminal; WSL is not the Windows desktop daemon path.
-
-For release acceptance, run the [native model and resampler checks](dev/model-validation.md#windows-cpu-and-supported-gpu-backends) and [installation lifecycle checks](dev/model-validation.md#windows-installation-lifecycle) for isolated Cargo installs and relocated bundles.
+Build with the [Windows bundle scripts](../scripts/windows/README.md) or [install an existing bundle](../scripts/windows/README.md#install-an-existing-bundle). Run the daemon from a native Windows terminal for desktop input. See [first run](running.md#first-run).
 
 ## Microphone Permissions
 
@@ -14,24 +10,20 @@ In Windows 11, open Settings > Privacy & security > Microphone and enable microp
 
 ## Hotkey
 
-The push-to-talk chord is `Ctrl+Space` and is not configurable. parakit registers it with Win32's `RegisterHotKey`, which gives a clean, OS-level conflict signal instead of racing another listener for the same keys.
+Parakit registers the fixed `Ctrl+Space` chord through Win32's `RegisterHotKey`. If another app owns it, `parakit doctor` reports `hotkey FAIL` and the daemon cannot start. Doctor immediately releases the shortcuts it probes. Its verbose output reports conflicts on the optional Qwen chord while leaving ordinary dictation available. See [Qwen context shortcuts and AltGr](models/qwen3-asr.md#prior-dictation-context).
 
-Qwen3-ASR adds `Ctrl+Left Alt+Space`; `Ctrl+Right Alt+Space` is consumed without recording. See [context shortcuts and the AltGr limitation](models/qwen3-asr.md#prior-dictation-context).
+If dictation does not start when you hold the chord, check your IME for a conflicting input-mode shortcut.
 
-`parakit doctor` probes both registrations and releases them immediately. An already-owned `Ctrl+Space` produces a `hotkey` `FAIL`; an unavailable context chord appears in `parakit --verbose doctor` details without failing the hotkey check. If another application already holds `Ctrl+Space` and you start the daemon anyway, `RegisterHotKey` fails and parakit exits right away with a message pointing back at `doctor`.
-
-Some Windows input methods, particularly CJK IMEs, bind `Ctrl+Space` to toggle input mode. If parakit never reacts to the held chord, check for a conflicting IME shortcut before assuming a bug.
-
-Windows has a single hotkey backend. The Linux-only `--hotkey-backend` flag documented in [linux-desktop.md](linux-desktop.md) is not accepted on Windows; the `RegisterHotKey` path is always used.
+Windows has a single hotkey backend, so the Linux-only `--hotkey-backend` and `--insertion-backend` flags are not accepted.
 
 ## Insertion
 
-Parakit compares the recording's foreground window before sending the paste shortcut with `SendInput`. If the target cannot be captured or verified, automatic paste is skipped. A normal user process cannot inject into an administrator/elevated target application. Rejected non-direct insertions still follow the shared [clipboard staging policy](running.md#clipboard-staging-and-restore).
+Parakit checks the foreground window before sending input with `SendInput`. If the target cannot be captured or verified, automatic insertion is skipped. Run the target app at the same privilege level as Parakit so Windows permits input delivery. See the [clipboard staging policy](running.md#clipboard-staging-and-restore).
 
-When its background clipboard-history listener is available, Windows uses it to time restoration after the staged write reaches the clipboard; otherwise it uses a timed fallback. Neither path confirms that text landed in the target; see [insertion outcomes](logging.md#insertion-outcomes). [Paste modes](running.md#insertion) select the shortcut or direct typing.
+Parakit uses a Windows clipboard-update listener to time restoration, with a timed fallback when it cannot observe the update. This gives clipboard history time to see the staged write. Check the target app to confirm insertion. See [paste modes](running.md#insertion) and [insertion outcomes](logging.md#insertion-outcomes).
 
 ## `doctor --deep`
 
-In `standard` or `terminal` mode, `doctor --deep` opens a visible Win32 edit window, briefly takes focus, stages a sentinel on the clipboard, sends the configured paste chord, and reads the text back. Cleanup restores supported clipboard content only while the staged sentinel remains current; a newer copy is preserved, and clipboard observation errors fail the check. Windows may use a brief cursor-click fallback to focus the probe, then restores the cursor position afterward. Run it from an unlocked interactive desktop. In `direct` mode, it performs backend preflight only and does not type into the probe.
+Run `parakit doctor --deep` from an unlocked interactive desktop. In `standard` or `terminal` mode it briefly focuses a visible Win32 edit window, sends the configured chord, and reads back the pasted text. It preserves newer clipboard copies during cleanup. If it has to click the window to focus it, the cursor returns to its original position. In `direct` mode the command performs preflight only.
 
-The probe checks Win32 input delivery and edit-control readback. Passing does not establish the daemon's clipboard-history timing or paste behavior in other applications.
+For clipboard-history timing, receiving-app behavior, and native inference checks, see [Windows validation](dev/model-validation.md#windows-cpu-and-supported-gpu-backends).

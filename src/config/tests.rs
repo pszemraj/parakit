@@ -31,6 +31,52 @@ fn write_fixture(name: &str, contents: &str) -> PathBuf {
 }
 
 #[test]
+fn invalid_word_replacements_fail_load_even_when_cleaning_is_disabled() {
+    let expected_shape = r#"a string or { replacement = "...", case_sensitive = bool }"#;
+    for (name, text, expected) in [
+        ("empty", "'' = 'Qwen'", "one nonempty word"),
+        ("phrase", "'some word' = 'Qwen'", "one nonempty word"),
+        ("empty-text", "basically = ''", "key \"basically\""),
+        ("blank-text", "basically = '  '", "[[rules.user]]"),
+        (
+            "empty-table",
+            "basically = { replacement = '', case_sensitive = true }",
+            "delete words with a [[rules.user]] rule",
+        ),
+        ("pattern", "'quan.*' = 'Qwen'", "one nonempty word"),
+        ("type", "quan = 3", expected_shape),
+        (
+            "missing-target",
+            "quan = { case_sensitive = true }",
+            expected_shape,
+        ),
+        (
+            "misspelled-target",
+            "quan = { replacment = 'Qwen' }",
+            expected_shape,
+        ),
+        (
+            "unknown-option",
+            "quan = { replacement = 'Qwen', case_sensitiv = true }",
+            expected_shape,
+        ),
+        (
+            "case-duplicate",
+            "quan = 'Qwen'\nQUAN = 'Other'",
+            "replacements keys \"QUAN\" and \"quan\" differ only in case; keep one",
+        ),
+    ] {
+        let path = write_fixture(
+            name,
+            &format!("[cleaning]\nenabled = false\n[replacements]\n{text}\n"),
+        );
+        let error = format!("{:#}", load_from_path(&path).unwrap_err());
+        assert!(error.contains(expected), "{error}");
+        assert!(error.contains(&path.display().to_string()), "{error}");
+    }
+}
+
+#[test]
 fn config_defaults_from_missing_empty_or_template_file() {
     // Missing, empty, and commented-template files select built-in defaults.
     let cases: [(&str, &str, Option<&str>); 3] = [

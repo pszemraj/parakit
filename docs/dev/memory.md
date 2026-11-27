@@ -1,27 +1,25 @@
 # Model Memory and Idle Offload
 
-See [idle model offload](../running.md#idle-model-offload) for residency, readiness, and device-selection policy.
+Measure model memory separately from [residency and readiness](../running.md#idle-model-offload).
 
 ## Allocation Ownership
 
-The worker owns the inference engine and native session; [lifecycle internals](architecture.md#state-machine) describe activity admission, destruction, and queued reloads.
+Session destruction releases owned weights, graph state, and backend buffers. Process allocators and GPU drivers may keep their caches. Check `parakit --verbose status` and compare memory before and after destruction to distinguish model residency from retained allocations. [Session lifecycle](architecture.md#state-machine)
 
-Session destruction releases owned weights, graph state, and backend buffers. Process allocators and GPU drivers can retain caches afterward. Residual process memory alone does not establish that a session remains loaded or identify a leak; check model residency through `parakit --verbose status` as well.
-
-A model file's size does not bound runtime memory. Loading, readiness, and inference have different allocation patterns, and working space can grow with audio length and generation settings. GPU inference also uses host memory.
+Loading, readiness, and inference have different allocation patterns. Working space can grow with audio length and generation settings, and GPU inference also uses host memory.
 
 ## GPU Reload Accounting
 
-Use the [reload requirements and preflight limitations](../running.md#idle-model-offload), implemented in `src/daemon/engine_runtime.rs`, to interpret measurements. Keep startup, reload, and long-input checks separate.
+Interpret measurements alongside the [GPU reload preflight](../running.md#idle-model-offload) in [`engine_runtime.rs`](../../src/daemon/engine_runtime.rs).
 
 ### Metal Qwen Reload Accounting
 
-Qwen's main model and shared audio tower each register a full-file Metal buffer view with the default mmap loader. The audio tower filters tensor names, but its Metal mapping covers the entire GGUF. The reload requirement counts both views in the same accounting domain as Metal's free-memory query.
+With the default mmap loader, both Qwen's main model and its audio tower register a full-file Metal buffer view. The reload requirement counts both views against Metal's reported free memory.
 
-Host RSS and Metal allocation accounting overlap on unified-memory systems. Record them separately rather than adding them together. Qualify artifacts, environment overrides, and hardware with the [native model procedure](model-validation.md#qwen-options-long-input-and-reload).
+Report host RSS and Metal allocations separately because they overlap on unified-memory systems. [Native model validation](model-validation.md#qwen-options-long-input-and-reload)
 
 ## Measuring Memory
 
-Sample host RSS and per-process GPU allocation through startup, readiness, short and long inference, idle offload, and reload. Compare the allocation rise from the offloaded baseline with the reload requirement: retained driver allocations are already excluded from reported free GPU memory and should not be charged again. Sampled peaks are lower bounds, so retain the sampling interval alongside the measurements.
+Sample host RSS and per-process GPU allocation through startup, readiness, short and long inference, idle offload, and reload. Compare the rise from the offloaded baseline with the reload requirement because reported free GPU memory already excludes retained driver allocations. Record the sampling interval. Sampled peaks are lower bounds.
 
 Record the model artifact, input audio, language and token settings, native backend, build configuration, and runtime revision with each run. Use the [Linux GPU procedure](quality.md#linux-cudavulkan) or the [native model checklist](model-validation.md), and keep generated measurements and command logs under ignored `target/tmp/`.

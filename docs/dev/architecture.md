@@ -1,6 +1,6 @@
 # Architecture
 
-Parakit keeps the daemon thread-based. There is no long-running Rust async runtime.
+The daemon runs on dedicated threads.
 
 ## Thread Model
 
@@ -20,7 +20,7 @@ Linux IBus client thread     watches the helper and sends guarded native commits
 Windows clipboard thread     observes clipboard-history acknowledgement when available
 ```
 
-On Linux, IBus separately manages `parakit-ibus`. Its GLib event loop owns the factory, `IBusEngineSimple` instances, native target generations, and commit callbacks. The executable links only the input-method bridge and its system libraries, with no audio, model, or daemon-config code. The user's existing daemon startup remains independent of this input-method process.
+On Linux, IBus manages `parakit-ibus` separately from the daemon. Its GLib event loop owns the factory, `IBusEngineSimple` instances, target generations, and commit callbacks. The executable links only the input-method bridge and its system libraries.
 
 ## State Machine
 
@@ -34,13 +34,13 @@ Transcribing
 Idle
 ```
 
-The worker skips empty and effectively silent captures before inference. Short speech is right-padded with silence instead of being rejected; captures shorter than one second use ordinary transcription even when context was requested. Direct `Engine` calls apply padding and the subsecond fallback but do not run the worker's silence filter.
+The worker skips empty and effectively silent captures before inference. The `Engine` right-pads short audio and uses ordinary transcription below one second, including calls that request Qwen context.
 
-Hotkey press latches the dictation mode, which the coordinator carries through recording to the worker's stopped-PCM event. Releasing Alt or Option does not change that mode. Immediately before Qwen inference, the worker selects eligible prior text from the existing in-memory transcript history and orders it chronologically. `Engine` applies that text to the native session for the call and clears it after success or failure, preserving the language and token controls. The [context guide](../models/qwen3-asr.md#prior-dictation-context) describes shortcut behavior, configuration, and history limits.
+The coordinator carries the press-time dictation mode to the worker in the stopped-PCM event. Before contextual Qwen inference, the worker selects eligible transcripts from in-memory history in chronological order. `Engine` applies them for one call and clears the context after success or failure. [Qwen shortcuts and settings](../models/qwen3-asr.md#prior-dictation-context)
 
 Model residency has a separate `loaded -> offloaded -> loading -> loaded` lifecycle. Startup remains eager; only the worker destroys or reopens the session. A shared activity gate admits recording before audio starts, and its lease follows PCM through queued transcription and insertion. IPC insertion takes the same gate before waiting for the insertion mutex. Expiry removes the session from the worker slot under the gate, then destroys it after unlocking. A new PTT can capture during destruction; the worker finishes teardown before reloading. Loading also leaves the gate unlocked. The last lease release restarts the idle deadline, including failure and silence paths. Status/history reads take no lease and never load the model.
 
-The reload recipe retains the resolved local path, model preset, thread count, device policy, and Qwen options. It revalidates the device policy and reapplies those options when reopening the session. See [idle model offload](../running.md#idle-model-offload) for GPU-memory preflight and model-aware readiness behavior. A failed reload leaves the slot offloaded with an error; a later PTT retries. Without `--verbose`, startup discards process-wide stderr during model opening, including native errors and diagnostics from the already-running IPC, capture, and sound threads. A model-open error directs the user to rerun with `--verbose` for those details. Reload instead passes stderr through a line filter that drops only Parakeet's two informational loader lines, so native errors and concurrent audio or IPC diagnostics still appear. `--verbose` disables both.
+The reload recipe retains the model selection, thread count, device policy, and Qwen options. Failures leave the slot offloaded with an error. Without `--verbose`, startup discards process-wide stderr during model opening. Reload filters only Parakeet's two informational loader lines, leaving native errors and concurrent diagnostics visible. [Idle offload and retry](../running.md#idle-model-offload)
 
 IPC stop wakes the worker and waits for its engine to be destroyed before running native process teardown. The lifetime guard is registered before IPC startup and transferred with the engine. Stop shares a bounded budget with insertion completion, without holding the insertion mutex while waiting for the worker. If the budget expires, immediate process termination avoids racing C++ static destructors with live native buffers. A failed hotkey backend returns to the daemon owner, which uses the same handshake before exiting with status 2.
 
@@ -52,16 +52,21 @@ Live capture drains callback audio through a bounded single-producer/single-cons
 - `rodio::OutputStream` is not reliably `Send`, so cue playback lives on its own thread and opens output only for the duration of a cue.
 - Parakit's `OwnedSession` is `Send` but not `Sync`, so the worker owns `Engine` directly. Do not wrap it in `Arc<Engine>`.
 - Hotkey backends emit only logical press/release transitions. They do not call audio, ASR, clipboard, or insertion code.
-- Runtime focus and insertion behavior is in [running.md#insertion](../running.md#insertion); backend setup is in [linux-desktop.md](../linux-desktop.md), [macos-desktop.md](../macos-desktop.md), and [windows-desktop.md](../windows-desktop.md).
-- Normal dictation hotkey backends must suppress the literal Space key before it reaches the focused application. The passive `x11-listen` backend is for debugging and does not suppress keys.
+- Normal dictation hotkey backends suppress literal Space. The passive `x11-listen` backend observes it for debugging. [Linux hotkey backends](../linux-desktop.md)
 
-Cross-thread communication uses atomics, mutex-protected buffers, and channels.
+Startup and WAV simulation share resolved settings through `WorkerSettings`. `WorkerCtx` supplies the resources specific to each mode. Simulation uses a silent notifier, disabled sounds and insertion, and a private in-memory history. Startup exposes IPC before cleaner and model initialization. The banner reads the same `DaemonInfo` as IPC status. Optional `parakit_version` and `cleaner_version` fields on the IPC status response allow a new client to read older daemon responses. [Worker simulation](quality.md#ptt-worker-simulation)
 
-Configuration sections provide built-in fallbacks; CLI resolvers apply overrides. Normal startup and WAV simulation share resolved idle, logging, paste-mode, clipboard-retention, and context settings through `WorkerSettings`. The banner borrows the `DaemonInfo` stored for IPC status. Mode-specific resources remain explicit in `WorkerCtx`: simulation has a silent notifier, disabled sounds and insertion, and no daemon singleton or control endpoint. Normal startup exposes IPC before cleaner/model initialization; the worker lifetime still follows native-session ownership.
-
-Library cleaner constructors `build_cleaner`, `build_enabled_cleaner`, and `validate_configured_rules` take `repetition_exceptions: &[String]` immediately after `number_threshold`; `&[]` retains the built-in defaults. All three use the same input-validation path, including when cleaning is disabled.
+The daemon and `transcribe-file` call `initialize_crispasr_runtime_defaults` before creating threads or opening a model. Library callers can initialize at the same point or set the equivalent environment variables before native code starts. [Native inference controls](../configuration.md#native-inference-controls)
 
 The Linux daemon attaches to the helper over IBus's private bus and advertises recording readiness. Input callbacks emit directed PTT signals without waiting for daemon work. At the actual PTT press, the engine captures a token containing helper/attachment lifetime, engine identity, and focus generation. The coordinator carries it unchanged through capture and inference. Validation and `commit_text` run together on the helper's owning loop. See [focus changes](../running.md#focus-changes) for delivery policy.
+
+## Cleaner Rules
+
+Add a built-in at the intended position in [`DEFAULT_RULES`](../../src/rules/defaults.rs). Use `regex_rule!` for ordinary substitutions, `fancy_rule!` for bounded advanced matching such as backreferences, and `procedural_rule!` for token or syntax rules. A backtrack-limit failure retains the raw transcript and records a cleaning failure. [Cleaning metadata](../logging.md#transcription-record-fields)
+
+Give each rule a stable name, activation, regression coverage, and per-rule hit attribution. Use `Activation::Safe` for high-confidence mechanical edits and `Activation::Aggressive` for edits that can change meaning. Keep the five `RuleKind::Numbers` entries adjacent so the engine can process enabled numeric categories in one scan. Increment `CLEANER_VERSION` when behavior, identity, or order changes. Check downstream matches with a corpus replay before moving a pass. [Rule order](../cleaning-rules.md#rule-order) and [corpus replay](quality.md#cleaning-corpus-replay)
+
+`build_cleaner`, `build_enabled_cleaner`, and `validate_configured_rules` share input validation. Pass an empty `repetition_exceptions` slice to use only built-in exceptions. Configured whole-word replacements compile into named rules that match the same final text and retain separate hit counts. [Replacement configuration](../cleaning-rules.md#word-replacements)
 
 ## Module Map
 
@@ -101,6 +106,7 @@ The Linux daemon attaches to the helper over IBus's private bus and advertises r
 | `src/rules/{engine,defaults,passes,user}.rs` | Transcript cleanup pipeline, profiles, built-in rule table, procedural passes, and user rules from `config.toml`. |
 | `src/rules/{numbers,number_guards,number_labels,number_quantities,number_versions,number_words}.rs` | Shared numeric tokenization and rendering, quantity extents and connected bounds, protected quantities, calendar years, versions, and number-word/unit vocabulary. |
 | `src/rules/stutters.rs` | Adjacent repeated-word collapsing and configured repetition exceptions. |
+| `src/rules/phrase_breaks.rs` | Filled pauses and function-word punctuation repair. |
 | `src/daemon/desktop/{inject,focus_snapshot,clipboard_store,paste_transaction,clipboard_guard,x11_paste,direct,clipboard_restore}.rs` | Insertion contract and injector, focus snapshots, clipboard backend and snapshots, the guarded paste transaction and change detection, X11/XTest paste chord, guarded direct insertion, and restore timing. |
 | `src/data_log.rs` | JSONL transcription and insertion-outcome logging. |
 | `src/audio_file.rs` | WAV decoding and mono mixing; shared Rubato target-rate resampler used by file input and live capture on every platform. See [microphone behavior](../running.md#microphone). |
@@ -120,6 +126,6 @@ Runtime failures are reported and the daemon continues when possible: sound cues
 
 Native delivery and uncertainty are described under [insertion outcomes](../logging.md#insertion-outcomes).
 
-`ClipboardSnapshot` in `daemon/desktop/clipboard_store.rs` shares capture, restoration, and exact payload comparison. Production restoration consumes the saved value without cloning; diagnostic restoration borrows it for cleanup retries. The macOS doctor's independent read-back and repair behavior is described under [deep diagnostics](../macos-desktop.md#doctor---deep); production generation checks remain in `StagedClipboard`.
+`ClipboardSnapshot` in [`clipboard_store.rs`](../../src/daemon/desktop/clipboard_store.rs) owns capture, restoration, and exact payload comparison. Production restoration consumes the saved value and checks ownership through `StagedClipboard`. Diagnostic restoration borrows the snapshot for cleanup retries. [macOS deep diagnostics](../macos-desktop.md#doctor---deep)
 
 `PasteReport` describes transaction results and acknowledgement telemetry. `InsertReport` adds worker policy, direct-typing progress, and degraded-outcome diagnostics. Staging uses one `From<StageOutcome>` conversion into paste telemetry; the worker retains separate notifications, history, and alert decisions. The serialized fields and outcome meanings are in [logging](../logging.md#insertion-record-fields).

@@ -19,6 +19,15 @@ fn isolated_parakit(root: &Path) -> Command {
     command
 }
 
+#[cfg(unix)]
+fn isolated_runtime_dir(root: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "linux") {
+        root.join("runtime/parakit")
+    } else {
+        root.join("cache/parakit/run")
+    }
+}
+
 fn isolated_parakit_with_empty_config(name: &str) -> Command {
     let root = common::fixture_root("cli-contracts", name);
     std::fs::create_dir_all(&root).expect("fixture root should be created");
@@ -28,6 +37,135 @@ fn isolated_parakit_with_empty_config(name: &str) -> Command {
     let mut command = isolated_parakit(&root);
     command.env("PARAKIT_CONFIG_PATH", config);
     command
+}
+
+#[test]
+fn version_output_identifies_the_cli_binary_without_loading_config() {
+    let root = common::fixture_root_with_files("cli-contracts", "cli-version", &["config.toml"]);
+    let config = root.join("config.toml");
+    std::fs::write(&config, "invalid = [").unwrap();
+    for flag in ["-V", "--version"] {
+        let output = isolated_parakit(&root)
+            .env("PARAKIT_CONFIG_PATH", &config)
+            .arg(flag)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(output.stderr.is_empty());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.starts_with(&format!(
+            "parakit {} (CLI binary)\n",
+            env!("CARGO_PKG_VERSION")
+        )));
+        if flag == "--version" {
+            assert!(text.contains("Run `parakit status`"));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn status_distinguishes_cli_daemon_and_unreported_versions() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::time::{Duration, Instant};
+
+    let cli_version = env!("CARGO_PKG_VERSION");
+    let cli_cleaner = parakit::rules::CLEANER_VERSION;
+    for (name, version, cleaner, differs) in [
+        ("matching", Some(cli_version), Some(cli_cleaner), false),
+        ("old-package", Some("0.5.3"), Some(32), true),
+        (
+            "old-cleaner",
+            Some(cli_version),
+            Some(cli_cleaner - 1),
+            true,
+        ),
+        ("legacy", None, None, false),
+    ] {
+        for flags in [
+            &["status"][..],
+            &["--verbose", "status"],
+            &["--quiet", "status"],
+        ] {
+            let root = common::fixture_root("cli-contracts", &format!("status-version-{name}"));
+            let runtime = isolated_runtime_dir(&root);
+            std::fs::create_dir_all(&runtime).unwrap();
+            let listener = UnixListener::bind(runtime.join("control.sock")).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let mut status =
+                serde_json::json!({"phase":"idle","last_transcript_len":42,"detail":null});
+            if let Some(version) = version {
+                status["parakit_version"] = version.into();
+            }
+            if let Some(cleaner) = cleaner {
+                status["cleaner_version"] = cleaner.into();
+            }
+            let response = serde_json::json!({"status":status}).to_string();
+            let server = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "status client did not connect");
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("status endpoint failed: {error}"),
+                    }
+                };
+                // An accepted socket can inherit the listener's non-blocking mode (it does
+                // on macOS), and the read must wait for the client's request.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = String::new();
+                BufReader::new(&stream).read_line(&mut request).unwrap();
+                assert_eq!(request, "\"status\"\n");
+                writeln!(stream, "{response}").unwrap();
+            });
+            let output = isolated_parakit(&root).args(flags).output().unwrap();
+            server.join().unwrap();
+            assert!(output.status.success(), "{name}/{flags:?}: {output:?}");
+            assert!(output.stderr.is_empty());
+            let text = String::from_utf8(output.stdout).unwrap();
+            if flags.contains(&"--quiet") {
+                assert!(text.is_empty(), "{text}");
+                continue;
+            }
+            assert!(
+                text.starts_with("parakit: idle\nlast transcript: 42 bytes\n"),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!(
+                    "CLI version: {cli_version} (cleaner {cli_cleaner})"
+                )),
+                "{text}"
+            );
+            if let Some(version) = version {
+                assert!(
+                    text.contains(&format!(
+                        "daemon version: {version} (cleaner {})",
+                        cleaner.unwrap()
+                    )),
+                    "{text}"
+                );
+            } else {
+                assert!(text.contains("daemon version: unreported"), "{text}");
+                assert!(
+                    text.contains("restart the daemon after upgrading"),
+                    "{text}"
+                );
+            }
+            assert_eq!(
+                text.contains("CLI and daemon versions differ"),
+                differs,
+                "{text}"
+            );
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "ibus"))]
@@ -114,6 +252,23 @@ fn simulated_ptt_rejects_missing_model_before_loading_output() {
 }
 
 #[test]
+fn simulated_ptt_validates_rule_names_before_audio_or_model_loading() {
+    let output = isolated_parakit_with_empty_config("invalid-simulated-rule")
+        .args([
+            "start",
+            "--disable-rule",
+            "typo",
+            "--simulate-ptt-audio",
+            "target/tmp/nonexistent-audio.wav",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no rule named 'typo'"));
+}
+
+#[test]
 fn broken_config_does_not_block_documented_control_and_repair_commands() {
     let root = common::fixture_root("cli-contracts", "broken-config-control");
     std::fs::create_dir_all(&root).expect("fixture root should be created");
@@ -128,8 +283,8 @@ fn broken_config_does_not_block_documented_control_and_repair_commands() {
         &["config", "init"],
         &["config", "edit"],
     ];
-    // Unix daemon endpoints are isolated under XDG_RUNTIME_DIR. The Windows
-    // named pipe is keyed directly by the user's SID and has no test-path
+    // Unix daemon endpoints use the isolated runtime or cache directory.
+    // The Windows named pipe is keyed directly by the user's SID and has no test-path
     // override, so these commands must not contact it from the test suite.
     #[cfg(unix)]
     let commands = [
@@ -380,10 +535,7 @@ fn spawn_stop_with_held_lock(
     name: &str,
 ) -> (std::path::PathBuf, std::fs::File, std::process::Child) {
     let root = common::fixture_root("cli-contracts", name);
-    #[cfg(target_os = "linux")]
-    let runtime = root.join("runtime").join("parakit");
-    #[cfg(not(target_os = "linux"))]
-    let runtime = root.join("cache").join("parakit").join("run");
+    let runtime = isolated_runtime_dir(&root);
     std::fs::create_dir_all(&runtime).unwrap();
     let lock = std::fs::OpenOptions::new()
         .create(true)

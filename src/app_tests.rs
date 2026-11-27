@@ -7,6 +7,148 @@ const GGML_LOG_LEVEL_INFO: i32 = 2;
 const GGML_LOG_LEVEL_ERROR: i32 = 4;
 
 #[test]
+fn word_replacements_reach_rules_and_daemon_cleaners() {
+    let variants: Vec<String> = (0..16)
+        .map(|mask| {
+            "quan"
+                .chars()
+                .enumerate()
+                .map(|(index, ch)| {
+                    if mask & (1 << index) == 0 {
+                        ch
+                    } else {
+                        ch.to_ascii_uppercase()
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let input = format!(
+        "{}; quandary aquan quan_thing cost rust and RUST or Rust. QUÁN, QUX and foo or bar",
+        variants.join(", ")
+    );
+    let expected = format!(
+        "{}; quandary aquan quan_thing $5 Rust and RUST or Rust. Quán, qwen3 and bar or foo",
+        ["Qwen"; 16].join(", ")
+    );
+    for profile in ["safe", "aggressive"] {
+        let path = crate::test_support::write_config_fixture(
+            "parakit-app-test",
+            profile,
+            &format!(
+                "
+                [cleaning]
+                profile = '{profile}'
+
+                [[rules.user]]
+                name = 'replace-word:rename-quen'
+                position = 'last'
+                pattern = '(QU)X'
+                replacement = '${{1}}EN'
+
+                [replacements]
+                quan = 'Qwen'
+                'quán' = 'Quán'
+                quen = 'qwen3'
+                qwen = 'qwen3'
+                foo = 'bar'
+                bar = 'foo'
+                cost = {{ replacement = '$5' }}
+                rust = {{ replacement = 'Rust', case_sensitive = true }}
+                "
+            ),
+        );
+        let config = config::load_from_path(&path).unwrap();
+        let cli = Cli::parse_from(["parakit", "start"]);
+        let Some(Commands::Start(start)) = cli.command else {
+            panic!("expected start")
+        };
+        let cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+        assert_eq!(cleaner.clean_text(&input), expected, "{profile}");
+        let cleaner = build_rules_cleaner(&RulesArgs::default(), &config).unwrap();
+        let result = cleaner.clean(&input);
+        assert_eq!(result.text, expected);
+        for (name, matches) in [
+            ("replace-word:quan", Some(16)),
+            ("replace-word:rust", Some(1)),
+            ("replace-word:bar", Some(1)),
+            ("replace-word:foo", Some(1)),
+            ("replace-word:rename-quen", Some(1)),
+            ("replace-word:qwen", None),
+        ] {
+            let observed = result.rules_fired.iter().find(|hit| hit.name == name);
+            assert_eq!(observed.map(|hit| hit.matches), matches, "{name}");
+        }
+    }
+}
+
+#[test]
+fn word_replacements_keep_exact_output_case_and_obey_cleaning_controls() {
+    let mut config = ConfigFile::default();
+    config
+        .replacements
+        .insert("quan".into(), config::WordReplacement::Text("qwen".into()));
+    let cli = Cli::parse_from(["parakit", "start"]);
+    let Some(Commands::Start(start)) = cli.command else {
+        panic!("expected start")
+    };
+    let cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+    assert_eq!(cleaner.clean_text("quan"), "qwen");
+    let identity = cleaner.ruleset_id().to_owned();
+    config
+        .replacements
+        .insert("quan".into(), config::WordReplacement::Text("Qwen".into()));
+    let cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+    assert_ne!(cleaner.ruleset_id(), identity);
+    let identity = cleaner.ruleset_id().to_owned();
+    config.replacements.insert(
+        "quan".into(),
+        config::WordReplacement::Options {
+            replacement: "Qwen".into(),
+            case_sensitive: true,
+        },
+    );
+    let cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+    assert_eq!(cleaner.clean_text("Try quan and QUAN"), "Try Qwen and QUAN");
+    assert_ne!(cleaner.ruleset_id(), identity);
+    config
+        .cleaning
+        .disabled_rules
+        .push("replace-word:quan".into());
+    let cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+    assert_eq!(cleaner.clean_text("quan"), "Quan");
+    config.cleaning.enabled = Some(false);
+    assert!(build_cli_cleaner(&start, &config).unwrap().is_none());
+}
+
+#[test]
+fn calendar_years_convert_before_earlier() {
+    for profile in [
+        rules::CleaningProfile::Safe,
+        rules::CleaningProfile::Aggressive,
+    ] {
+        for threshold in [4.0, 10.0, 10_000.0] {
+            let mut config = ConfigFile::default();
+            config.cleaning.profile = Some(profile);
+            config.cleaning.number_threshold = Some(threshold);
+            let cli = Cli::parse_from(["parakit", "start"]);
+            let Some(Commands::Start(start)) = cli.command else {
+                panic!("expected start");
+            };
+            let cleaner = build_cli_cleaner(&start, &config).unwrap().unwrap();
+            let result = cleaner.clean("In twenty twenty five and earlier");
+            assert_eq!(
+                result.text, "In 2025 and earlier",
+                "{profile:?}/{threshold}"
+            );
+            assert_eq!(result.rules_fired.len(), 1);
+            assert_eq!(result.rules_fired[0].name, "calendar-years");
+            assert_eq!(result.rules_fired[0].matches, 1);
+        }
+    }
+}
+
+#[test]
 fn configured_repetition_exceptions_reach_daemon_and_rules_cleaners() {
     for profile in ["safe", "aggressive"] {
         let path = crate::test_support::write_config_fixture(

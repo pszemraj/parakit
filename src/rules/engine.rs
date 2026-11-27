@@ -13,7 +13,8 @@ use fancy_regex::{Regex as FancyRegex, RegexBuilder as FancyRegexBuilder};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::panic::AssertUnwindSafe;
 
 use super::defaults::DEFAULT_RULES;
 use super::numbers::NumberKind;
@@ -283,6 +284,7 @@ impl CompiledRule {
 #[derive(Debug)]
 pub struct Cleaner {
     rules: Vec<CompiledRule>,
+    word_replacement_start: usize,
     profile: CleaningProfile,
     drop_trailing_period: bool,
     number_threshold: f64,
@@ -418,10 +420,18 @@ impl Cleaner {
             )?);
         }
         push_user_rules(&mut rules, user_rules, RulePosition::Last, disabled)?;
+        let word_replacement_start = rules.len();
+        push_user_rules(
+            &mut rules,
+            user_rules,
+            RulePosition::WordReplacement,
+            disabled,
+        )?;
 
         let ruleset_id = compute_ruleset_id(profile, drop_trailing_period, &rules);
         Ok(Self {
             rules,
+            word_replacement_start,
             profile,
             drop_trailing_period,
             number_threshold,
@@ -446,19 +456,21 @@ impl Cleaner {
     ///
     /// # Panics
     ///
-    /// Does not panic; passes are applied in their compiled order.
+    /// Passes are applied in their compiled order and do not panic on valid
+    /// UTF-8; [`Cleaner::clean`] still catches a panic from a pass bug.
     pub fn try_clean(&self, input: &str) -> Result<CleanResult> {
         let mut text = Cow::Borrowed(input);
         let mut rules_fired = Vec::new();
+        let (rules, word_replacements) = self.rules.split_at(self.word_replacement_start);
 
         let mut index = 0;
-        while let Some(rule) = self.rules.get(index) {
+        while let Some(rule) = rules.get(index) {
             if let CompiledTransform::Numbers { threshold, .. } = &rule.transform {
                 let mut enabled = Vec::new();
                 while let Some(CompiledRule {
                     transform: CompiledTransform::Numbers { kind, .. },
                     ..
-                }) = self.rules.get(index)
+                }) = rules.get(index)
                 {
                     enabled.push(*kind);
                     index += 1;
@@ -492,6 +504,11 @@ impl Cleaner {
             });
             text = Cow::Owned(transformed.text.into_owned());
         }
+        if let Some(replaced) =
+            apply_word_replacements(word_replacements, text.as_ref(), &mut rules_fired)
+        {
+            text = Cow::Owned(replaced);
+        }
 
         Ok(CleanResult {
             text: text.into_owned(),
@@ -502,12 +519,12 @@ impl Cleaner {
 
     /// Apply every enabled pass, failing open to the original transcript.
     ///
-    /// If a bounded `fancy-regex` pass hits its runtime backtrack limit,
-    /// this returns the original `input` unchanged (never a
+    /// If a bounded `fancy-regex` pass hits its runtime backtrack limit, or a
+    /// pass panics, this returns the original `input` unchanged (never a
     /// partially-transformed string) with [`CleanResult::failure`] set to a
-    /// description of the error. This method never panics; it is the
-    /// preferred entry point for production paths such as the daemon
-    /// worker thread, where a panic would take down the worker.
+    /// description of the error or the panic message. This method never
+    /// panics; it is the preferred entry point for production paths such as
+    /// the daemon worker thread, where a panic would take down the worker.
     ///
     /// # Returns
     ///
@@ -518,18 +535,29 @@ impl Cleaner {
     /// # Errors
     ///
     /// This method is infallible: it returns `CleanResult`, not `Result`,
-    /// and never propagates an `Err`. A cleaning-pass failure is caught
-    /// internally and surfaced through [`CleanResult::failure`] instead of
-    /// as a `Result::Err`.
+    /// and never propagates an `Err`. A cleaning-pass failure or panic is
+    /// caught internally and surfaced through [`CleanResult::failure`]
+    /// instead of as a `Result::Err`.
     #[must_use]
     pub fn clean(&self, input: &str) -> CleanResult {
-        match self.try_clean(input) {
-            Ok(result) => result,
-            Err(err) => CleanResult {
-                text: input.to_string(),
-                rules_fired: Vec::new(),
-                failure: Some(format!("{err:#}")),
-            },
+        let failure = match std::panic::catch_unwind(AssertUnwindSafe(|| self.try_clean(input))) {
+            Ok(Ok(result)) => return result,
+            Ok(Err(err)) => format!("{err:#}"),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+                match message {
+                    Some(message) => format!("cleaning pass panicked: {message}"),
+                    None => "cleaning pass panicked".to_string(),
+                }
+            }
+        };
+        CleanResult {
+            text: input.to_string(),
+            rules_fired: Vec::new(),
+            failure: Some(failure),
         }
     }
 
@@ -676,6 +704,57 @@ fn push_user_rules(
         rules.push(compile_user_rule(rule)?);
     }
     Ok(())
+}
+
+fn apply_word_replacements(
+    rules: &[CompiledRule],
+    input: &str,
+    rules_fired: &mut Vec<RuleHit>,
+) -> Option<String> {
+    let mut replacements = BTreeMap::new();
+    for (index, rule) in rules.iter().enumerate() {
+        let CompiledTransform::Regex { re, replacement } = &rule.transform else {
+            unreachable!("word replacements compile to regex rules");
+        };
+        for matched in re.find_iter(input) {
+            // Whole-word matches can share a range when two keys case-fold
+            // to the same word. Keep the first enabled entry in key order.
+            replacements.entry(matched.start()).or_insert((
+                matched.end(),
+                index,
+                replacement.as_ref(),
+            ));
+        }
+    }
+    if replacements.is_empty() {
+        return None;
+    }
+
+    let mut hits = vec![(0, false); rules.len()];
+    let mut previous_end = 0;
+    let edits = replacements
+        .into_iter()
+        .filter_map(|(start, (end, index, replacement))| {
+            if start < previous_end {
+                return None;
+            }
+            previous_end = end;
+
+            let (matches, changed) = &mut hits[index];
+            *matches += 1;
+            *changed |= &input[start..end] != replacement;
+            Some((start, end, replacement))
+        });
+    let output = super::passes::apply_replacements(input, edits).text;
+    for (rule, (matches, changed)) in rules.iter().zip(hits) {
+        if changed {
+            rules_fired.push(RuleHit {
+                name: rule.name.clone(),
+                matches,
+            });
+        }
+    }
+    Some(output.into_owned())
 }
 
 fn compute_ruleset_id(
@@ -852,6 +931,56 @@ mod rule_application_tests {
             let changed = rule.apply(input).unwrap();
             assert_eq!(changed.text, "a$ b$");
             assert_eq!(changed.matches, 2);
+        }
+    }
+
+    fn panic_with_str(_: &str) -> TransformResult<'_> {
+        panic!("static message")
+    }
+
+    fn panic_with_string(_: &str) -> TransformResult<'_> {
+        panic!("{} message", "formatted")
+    }
+
+    fn panic_without_text(_: &str) -> TransformResult<'_> {
+        std::panic::panic_any(7_u32)
+    }
+
+    #[test]
+    fn clean_fails_open_when_a_pass_panics() {
+        type Pass = for<'a> fn(&'a str) -> TransformResult<'a>;
+        let cases: [(Pass, &str); 3] = [
+            (panic_with_str, "cleaning pass panicked: static message"),
+            (
+                panic_with_string,
+                "cleaning pass panicked: formatted message",
+            ),
+            (panic_without_text, "cleaning pass panicked"),
+        ];
+        for (transform, failure) in cases {
+            let mut cleaner = Cleaner::new_prevalidated(
+                CleaningProfile::Safe,
+                false,
+                None,
+                &[],
+                &HashSet::new(),
+                &[],
+            )
+            .unwrap();
+            cleaner.rules.insert(
+                0,
+                CompiledRule {
+                    name: "panics".to_string(),
+                    position: None,
+                    transform: CompiledTransform::Procedural(transform),
+                },
+            );
+            cleaner.word_replacement_start += 1;
+
+            let result = cleaner.clean("so um the thing");
+            assert_eq!(result.text, "so um the thing");
+            assert!(result.rules_fired.is_empty());
+            assert_eq!(result.failure.as_deref(), Some(failure));
         }
     }
 }

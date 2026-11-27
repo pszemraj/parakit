@@ -1,97 +1,68 @@
 # Troubleshooting
 
-Start with [parakit doctor](running.md#first-run). The `hotkey`, `daemon`, `mic`, and `insertion` status lines identify which checks need attention. For a running daemon, use [status and control commands](running.md#daemon-control).
+Run [`parakit doctor`](running.md#first-run) in the desktop session that launches parakit. Read the failing check first. For a running daemon, inspect [`parakit --verbose status`](running.md#daemon-control).
 
 ## Hotkey Problems
 
-If push-to-talk does nothing or another desktop action happens, read `hotkey` in `parakit doctor`, then follow the conflict checks for [Linux](linux-desktop.md#shortcut-conflicts), [macOS](macos-desktop.md#hotkey), or [Windows](windows-desktop.md#hotkey). Confirm only one daemon is running with `parakit status`; see [daemon control](running.md#daemon-control).
-
-For desktop-session or permission failures, follow the [X11 session checks](linux-desktop.md#x11-sessions) or [macOS permission recovery](macos-desktop.md#permissions).
-
-On Windows, use the [native desktop setup](windows-desktop.md#build).
+If push-to-talk does nothing or triggers another desktop action, check the `hotkey` result and the shortcut bindings for [Linux](linux-desktop.md#shortcut-conflicts), [macOS](macos-desktop.md#hotkey), or [Windows](windows-desktop.md#hotkey). If capture fails only in a particular session or launcher, check [X11 session access](linux-desktop.md#x11-sessions) or [macOS permissions](macos-desktop.md#permissions).
 
 ## IBus Dictation Stops After An Upgrade
 
-An older `parakit-ibus` helper cannot attach to a daemon using a newer bridge protocol, which stops ordinary and contextual dictation. If attachment fails or `Ctrl+Space` passes through after an upgrade, reinstall the daemon and matching helper together, then follow the [engine reload steps](linux-desktop.md#ibus-setup).
+If the helper fails to attach or `Ctrl+Space` passes through after an upgrade, follow the [IBus helper installation and reload steps](linux-desktop.md#ibus-setup).
 
 ## Qwen Context Has No Effect
 
-Confirm a Qwen3-ASR model is active and that `parakit history --plain` contains recent dictations. Inspect `parakit config show` and the [context shortcuts and eligibility rules](models/qwen3-asr.md#prior-dictation-context), then restart the daemon after any configuration change. On registered X11 or Windows, use `parakit --verbose doctor` before startup to inspect the optional context shortcut.
+Check the active model in `parakit --verbose status` and recent dictations in `parakit history --plain`. For Qwen3-ASR, check the [context shortcut and history requirements](models/qwen3-asr.md#prior-dictation-context). On Windows or X11 with the registered hotkey backend, `parakit --verbose doctor` can check the optional shortcut before startup.
 
 ## Literal Space Appears
 
-Follow the checks for [passive X11 capture](linux-desktop.md#passive-x11-listen), [focused-field IBus capture](linux-desktop.md#ibus-setup), or the [evdev proxy](linux-desktop.md#evdev-proxy), depending on the selected backend.
+Follow the checks for [passive X11](linux-desktop.md#passive-x11-listen), [focused-field IBus](linux-desktop.md#ibus-setup), or the [evdev proxy](linux-desktop.md#evdev-proxy), depending on the active Linux backend.
 
 ## Text Does Not Insert
 
-1. Reproduce without the microphone; this exercises insertion through the running daemon:
-
-   ```text
-   parakit test-paste "hello from parakit"
-   ```
-
-2. Run `parakit doctor --deep` for the platform's insertion-backend check. Platform requirements and the limits of `direct` mode are in the [Linux](linux-desktop.md#deep-doctor-check), [macOS](macos-desktop.md#doctor---deep), and [Windows](windows-desktop.md#doctor---deep) sections.
-3. Inspect the target before recovering the transcript; an unconfirmed paste may have landed. Use [daemon history](running.md#daemon-control), [JSONL logs](logging.md#how-to-read-a-dictation), or clipboard history if enabled.
-4. Check the selected [insertion transport and paste mode](running.md#insertion). To try `standard`:
-
-   ```text
-   parakit stop
-   parakit start --paste-mode standard
-   ```
-
-   To try `direct`, repeat the `parakit stop` and `parakit start` pair with `--paste-mode direct`, following the [Linux transport constraints](linux-desktop.md#insertion-selection-and-recovery) or [macOS permissions](macos-desktop.md#permissions). If focus changed before insertion or the target is elevated on Windows, see [focus changes](running.md#focus-changes).
+1. Run `parakit test-paste "hello from parakit"` from a disposable text prompt with the daemon running. This exercises insertion without recording audio.
+2. Check `parakit doctor --deep` on [Linux](linux-desktop.md#deep-doctor-check), [macOS](macos-desktop.md#doctor---deep), or [Windows](windows-desktop.md#doctor---deep). The check depends on the selected insertion backend and mode.
+3. Inspect the target before retrying. For an unconfirmed paste, check the [logged outcome](logging.md#insertion-outcomes) and recover the transcript from [daemon history](running.md#daemon-control) or an enabled clipboard history manager.
+4. If the shortcut is wrong for the target, stop the daemon and restart with [the appropriate paste mode](running.md#insertion). For a target switch, focus rejection, or elevated Windows application, see [focus changes](running.md#focus-changes).
 
 ## macOS Paste Could Not Be Confirmed
 
-Inspect the target before pressing `Cmd+V`: the paste may have landed even though parakit could not confirm it.
+Inspect the target first. If the transcript is missing and the notification says it was copied, press `Cmd+V`. If the notification says the clipboard changed, recover the transcript with `parakit copy-last` when history is enabled.
 
-1. If the notification says the transcript was copied and it is absent from the target, press `Cmd+V`.
-2. If it says the clipboard changed, do not paste blindly. Check the target, then use `parakit copy-last` if history is enabled.
-3. A one-off warning against a busy application may be a timeout; inspect the target before retrying. If it repeats with one application, reproduce with `parakit test-paste "hello from parakit"`; if the text lands but remains unconfirmed, use `parakit start --paste-mode direct` for that application.
-
-See [macOS insertion](macos-desktop.md#insertion) for notification behavior and [insertion outcomes](logging.md#insertion-outcomes) for the logged acknowledgement states.
+For a recurring warning in one app, run `sleep 3 && parakit test-paste "hello from parakit"` in a terminal and focus an empty field in the app during the delay. If the text lands but [paste confirmation](macos-desktop.md#insertion) keeps timing out, stop the daemon and restart with `parakit start --paste-mode direct` for that application.
 
 ## Wrong Microphone
 
-If speaking triggers the error tone or `parakit: no speech detected`, check the selected input device:
+If speaking triggers the error tone or `parakit: no speech detected`, check `mic` in `parakit doctor` or `parakit --verbose status`. Select the desired default input in desktop sound settings, macOS System Settings > Sound > Input, or Windows Settings > System > Sound. On PipeWire or PulseAudio, compare the default source with the available inputs.
 
-1. Check `mic` in `parakit doctor` or `parakit status --verbose`.
-2. Change the operating system's default input device; parakit follows that device. Use desktop sound settings, `pavucontrol` on Linux, System Settings > Sound > Input on macOS, or Settings > System > Sound on Windows.
-3. On PipeWire or PulseAudio, inspect the selected source and rerun doctor:
+```bash
+pactl get-default-source
+pactl list sources
+parakit doctor
+```
 
-   ```bash
-   pactl get-default-source
-   pactl list sources | grep -E 'Description:|Sample Specification:' | grep -v monitor
-   parakit doctor
-   ```
-
-Default-device switching and Bluetooth behavior are described under [microphone](running.md#microphone). For Windows microphone access, see [desktop microphone permissions](windows-desktop.md#microphone-permissions).
+See [microphone switching](running.md#microphone) for Bluetooth and device changes, or [Windows microphone permissions](windows-desktop.md#microphone-permissions) if access was denied.
 
 ## Model Reload Fails After Idle
 
-Read `model error` in `parakit --verbose status`, confirm the resolved model path and device are available with `parakit --verbose doctor`, then press PTT to retry. A changed model path or device setting requires a restart. See [idle model offload](running.md#idle-model-offload). For high memory after offload, see the [allocation ownership notes](dev/memory.md#allocation-ownership).
+Read `model error` and the model filename in `parakit --verbose status`. Locate a cached model with `parakit cache list`, or check the custom path supplied with `-m` or `daemon.model`. Use `parakit --verbose doctor` to inspect visible devices, then press the hotkey to retry. Restart after changing the model path or device setting. See [idle model offload](running.md#idle-model-offload) or, for high memory use after offload, [allocation ownership](dev/memory.md#allocation-ownership).
 
 ## Build And Model Issues
 
-For a missing CrispASR path dependency, follow [submodule setup](build.md#install). Use [native dependencies](build.md#native-dependencies) for missing headers or shared libraries, and the [Windows bundle scripts](../scripts/windows/README.md) for Windows installs. For model paths, cache inspection, and refetch commands, see [model cache](running.md#model-cache).
+For a missing CrispASR path dependency, follow [submodule setup](build.md#install). For missing headers or libraries, check [native dependencies](build.md#native-dependencies). For model paths, cache inspection, or a fresh download, see [model cache](running.md#model-cache).
 
 ## Downloads Behind A Corporate Proxy
 
-`parakit fetch` (the hosted default, `--from-source`, a Hugging Face repo, or a direct URL) fails with a TLS or connection error, or cannot reach `huggingface.co` at all.
-
-1. Read the full error: certificate or TLS failures may include a hint about trust and proxy configuration.
-2. Install your organization's CA in the operating system trust store, or configure a certificate file or directory. If your network requires an egress proxy, configure it as well. See [environment variables](configuration.md#environment-variables) for the supported settings and their effects.
-3. If `huggingface.co` is blocked, configure an internal Hugging Face mirror and, if needed, its token. The same [environment variable reference](configuration.md#environment-variables) explains which fetch requests use them.
+If `parakit fetch` reports a TLS or connection error, check the operating system's trust store and your proxy settings. For TLS interception, install your organization's CA or configure a certificate file or directory. If Hugging Face is blocked, set the mirror endpoint and supply a token if the mirror requires one. See the [download environment variables](configuration.md#environment-variables) for which requests use these settings.
 
 ```bash
 export HF_ENDPOINT=https://artifactory.example.com/huggingface
-export HF_TOKEN=hf_...
 parakit fetch
 ```
 
 ## Windows GPU Builds
 
-Follow the [Windows loader and runtime checks](../scripts/windows/README.md#runtime-manifest) and [runtime device selection](running.md#device-selection).
+Check the bundle's [runtime manifest and loader requirements](../scripts/windows/README.md#runtime-manifest), then [select the runtime device](running.md#device-selection).
 
 ## macOS Metal Builds
 

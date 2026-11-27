@@ -1,6 +1,6 @@
 # Validation
 
-Build success does not prove transcription quality. Use real user audio, not synthetic TTS.
+Use real speech recordings to assess transcription quality and synthetic fixtures to isolate signal-processing behavior.
 
 ## Rust Validation Loop
 
@@ -142,9 +142,9 @@ cargo run --release --no-default-features --features bundled --example transcrib
   --audio clips/example.wav
 ```
 
-The helper accepts WAV input, uses the same raw `Engine` path as the daemon, and prints raw inference text and timing. It intentionally does not import or apply parakit text-cleaning rules. This command avoids live daemon desktop/audio dependencies while keeping the bundled CrispASR build. Model cache behavior is in [running.md#model-cache](../running.md#model-cache). Pass `--model /path/to/model.gguf` only when comparing a specific custom GGUF. The source lives at [examples/transcribe_file.rs](../../examples/transcribe_file.rs); it is a Cargo example target so it is not installed as an end-user binary.
+The [Cargo example](../../examples/transcribe_file.rs) uses the daemon's `Engine` to report raw WAV transcripts and timings. Run it without default features to omit desktop dependencies. Supply `--model /path/to/model.gguf` to compare a specific local GGUF. [Model cache](../running.md#model-cache)
 
-Use `--model-preset` for any [hosted preset](../running.md#model-presets), including both Qwen sizes and the Moondream models:
+The example does not load the daemon's `config.toml`. Select a [hosted preset](../running.md#model-presets) with `--model-preset` and pass any [Qwen options](../models/qwen3-asr.md) on the command line:
 
 ```bash
 cargo run --release --no-default-features --features bundled --example transcribe-file -- \
@@ -152,40 +152,39 @@ cargo run --release --no-default-features --features bundled --example transcrib
   --qwen-language auto --qwen-max-new-tokens 512
 ```
 
-The example does not read daemon configuration. Model selectors, Qwen controls, and incomplete-decode behavior follow [model presets](../running.md#model-presets).
-
 For latency work, use short real clips around 2s, 5s, 15s, and 25s. Longer quality clips help catch transcription drift, but should not drive startup or post-release latency policy. Use `transcribe-file --warmup` to apply the [daemon readiness policy](../running.md#idle-model-offload). Repeatable `--warmup-seconds N` flags remain available for Parakeet shape diagnostics and are rejected for Qwen.
 
 ## PTT Worker Simulation
 
-The Rust suite runs the production recording coordinator and worker with a test audio manager and fake inference engine. It checks exact PCM captured before and during blocked reload, release before or after readiness, one transcription and completion, transcript history, and session destruction without a model or a minute-long timeout. These checks do not exercise native microphone startup or physical hotkeys; use the [physical desktop checks](model-validation.md#physical-desktop-checks) for those boundaries.
+The Rust suite uses the production recording coordinator and worker with a test audio manager and fake engine. It checks PCM capture across reload, release before and after readiness, history, and session destruction. Use the WAV simulation for real inference and the [desktop checks](model-validation.md#physical-desktop-checks) for physical hotkey and microphone behavior.
 
-Use the hidden simulation path when you need the daemon worker flow without a live keyboard, microphone, or text insertion:
+Run real inference through the daemon worker with a WAV file and an isolated configuration. For the pinned 55.36-second Juniper voice memo, use the original Parakeet v3 Q8_0 GGUF explicitly. Obtain the WAV and its reference transcript from the validation owner, or substitute a real speech WAV and its own reference.
 
 ```bash
-mkdir -p target/tmp && : > target/tmp/ptt-empty.toml
-PARAKIT_CONFIG_PATH=$PWD/target/tmp/ptt-empty.toml \
-XDG_CACHE_HOME=$PWD/target/tmp/ptt-cache \
-  cargo run -- start -m path/to/model.gguf --threads 8 --no-cleaning \
-  --simulate-ptt-audio local-scratch/juniper-voicememo-DO_NOT_DELETE.wav \
-  --model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61
+mkdir -p target/tmp/ptt-smoke
+touch target/tmp/ptt-smoke/config.toml
+export PARAKIT_CONFIG_PATH="$PWD/target/tmp/ptt-smoke/config.toml"
+model=models/parakeet-tdt-0.6b-v3-q8_0.gguf
+wav=local-scratch/juniper-voicememo-DO_NOT_DELETE.wav
+cargo run -- start -m "$model" --device cpu --threads 8 --no-cleaning \
+  --simulate-ptt-audio "$wav"
 ```
 
-The empty config file keeps your own `config.toml` out of the run; `PARAKIT_CONFIG_PATH` must name a file that exists. Use a real WAV with a known transcript. The pinned Juniper voice memo is 55.36 seconds; its local filename can vary by machine. Compare raw output with the readable reference transcript using task-appropriate tolerance. The command resamples it to the model rate and sends worker start/stop events with owned PCM. `--no-cleaning` exposes raw output for comparison; omit it to exercise cleanup too. Add the build feature and `--device` for the backend being tested. On PowerShell, create the empty file with `New-Item -ItemType File -Force target/tmp/ptt-empty.toml`, set the environment variables with `$env:NAME = ...`, and use the Windows WAV path.
+Set `model` and `wav` to your local fixture paths. The WAV goes through the shared resampler and worker start/stop events. Compare the raw transcript with the reference using task-appropriate tolerance. For another backend, use its build features and device flag. In PowerShell, create an empty configuration file, set `$env:PARAKIT_CONFIG_PATH`, and pass the Windows fixture paths.
 
-Simulation uses the [shared worker settings with desktop resources disabled](architecture.md#ownership-constraints), bypassing the singleton and control endpoint. Avoid concurrent inference when measuring timings; it does not pause an already-running daemon.
+Simulation bypasses the daemon singleton and control endpoint and leaves an existing daemon running. Avoid concurrent inference when measuring timings.
 
-The worker acknowledges each required transcript and verifies the expected residency after each wait (including the last). With history enabled and context disabled, repeated transcripts must match within the same process; this verifies reload behavior rather than recognition quality across builds. Context-enabled repetitions can differ as prior history changes. Missing transcripts, reload failures, or missed offloads return a failure exit status. An immediate simulated release exercises queuing while reload is busy. Use `--model-idle-minutes 0` to check disabled offloading. For one dictation without an idle wait, omit `--simulate-ptt-repeat` and `--simulate-ptt-idle-seconds`; both options require `--simulate-ptt-audio`.
+Add `--model-idle-minutes 1 --simulate-ptt-repeat 2 --simulate-ptt-idle-seconds 61` to test idle reload. Both simulate flags require `--simulate-ptt-audio`. The worker acknowledges every dictation, and simulation verifies residency after each wait, including the final one. The immediate simulated release exercises queuing during reload. With history enabled and context disabled, transcripts must match across cycles on the same worker. Missing transcripts, reload failures, and missed offloads return a failure status. Use `--model-idle-minutes 0` to check that the session remains loaded.
 
 Simulation requests the original shortcut's mode. To compare Qwen context, set `context_on_default_hotkey = true` under `[qwen]` in the isolated configuration, with nonzero `context_dictations` and `daemon.transcript_history`; the first successful capture supplies history for later captures. Keep context disabled for ordinary reload-parity checks.
 
 ### Cleaned Worker Parity
 
-Use the same installed executable and isolated configuration for worker simulation, `config show`, and `rules test`. Start with defaults, then repeat with an aggressive profile, configured threshold, repetition exceptions, and disabled numeric passes; use the existing [cleaner unit tests](../../src/rules/tests.rs) and [pipeline regressions](../../tests/cleaning_regressions.rs) for text-level boundaries instead of maintaining a separate platform-specific list.
+Use the same executable and isolated configuration for worker simulation, `config show`, and `rules test`. Start with defaults, then repeat with the aggressive profile, a custom number threshold, repetition exceptions, disabled numeric passes, and word replacements. The [cleaner unit tests](../../src/rules/tests.rs) and [pipeline regressions](../../tests/cleaning_regressions.rs) cover text-level boundaries.
 
-Run the pinned WAV with `--no-cleaning` to check recognition, then with `--cleaning` and `--log-dir` to check post-processing. Feed the latter run's exact JSONL `raw` text to `rules test`; its `Clean:` result must equal JSONL `cleaned`, and the changing-rule names and order must agree. This comparison uses the same recognized text even if separate inference runs differ.
+Run the pinned WAV with `--no-cleaning` to check recognition, then with `--cleaning --log-dir PATH` to check post-processing. Feed that run's exact JSONL `raw` text to `rules test`. Compare `Clean:` with JSONL `cleaned` and check rule names and order. Match the worker's effective cleaning overrides in the preview. [Rule preview options](../cleaning-rules.md#inspect-and-test)
 
-Restart the process with the same configuration and verify config read-back and [cleaning metadata](../logging.md#transcription-record-fields), including `ruleset_id` and `cleaner_version`, remain consistent. On a successful cached-model `--quiet` run without runtime warnings, verify empty stdout/stderr while JSONL still records the cleaned transcript and skipped simulation insertion without a paste event. Record any warnings separately. Keep recognition quality, cleaning parity, and physical insertion results separate.
+Restart with the same configuration and compare config read-back, `ruleset_id`, and `cleaner_version`. On a quiet run with a prepared model, verify empty stdout, record any stderr warnings, and check the JSONL for a cleaned transcript and a skipped insertion with no paste event. [Transcription and insertion fields](../logging.md)
 
 ## NeMo Reference Helper
 
@@ -302,24 +301,28 @@ Check the [source-rebuild cache and retention behavior](README.md#source-rebuild
 
 ## Cleaning Corpus Replay
 
-Use the audit example to measure a cleanup change over historical JSONL dictation logs without loading a speech model:
+Use `parakit rules test "<raw text>"` to reproduce a changed transcript. Turn off candidate passes one at a time with `--disable-rule` to isolate the cause. Add cases for both the intended repair and related text that should stay intact in [the rule tests](../../src/rules/tests.rs) or [pipeline regressions](../../tests/cleaning_regressions.rs). For personal vocabulary, configure a [word replacement or user rule](../cleaning-rules.md#word-replacements).
+
+Replay historical JSONL logs with the audit example.
 
 ```bash
 cargo run --no-default-features --features bundled --example audit-cleaning -- \
   "$HOME/.parakit/logs" \
   --profile safe \
-  --output target/cleaning-safe.json
+  --output target/tmp/cleaning-safe.json
 ```
 
 Run it again with `--profile aggressive` when changing an aggressive-only pass. Compare record counts, changed-from-raw counts, agreement with historical output, per-pass activation counts, and every retained difference example. A lower rule count or a larger changed-text count is not a quality metric; preservation of intended meaning and per-pass precision are.
 
 The audit removes one terminal period by default, matching daemon behavior. Add `--keep-trailing-period` when comparing prose-oriented output separately, and use `--number-threshold VALUE` to replay a non-default number-conversion threshold.
 
-The audit applies built-in rules only. It does not load `config.toml` or `[[rules.user]]`; pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate the currently configured user rules.
+The audit applies built-in rules only and does not load `config.toml`, including `[[rules.user]]` and `[replacements]`. Pass profile, threshold, trailing-period, and disabled-rule choices explicitly. Use `parakit rules test` to validate configured personal replacements.
+
+The default `--max-examples 40` limits retained examples, not aggregate counts. Raise it to retain every changed row for review.
 
 Number-rule invariants and personal vocabulary handling are in [cleaning rules](../cleaning-rules.md#numbers). Cover both preservation and nearby exact counts in the existing regression matrix.
 
-Before adding a built-in rule or exception, report its actual hit count from a log replay. For merge acceptance, compare the released 0.5.x cleaner with the candidate over the full same corpus using identical profile, threshold, trailing-period, and rule settings. Retain every changed row and review them all for meaning; compare with the current branch baseline too when simplifying existing behavior. Unit tests alone do not establish acceptance, and agreement with an older cleaner is not ground truth.
+Before adding a built-in rule or exception, count hits over a log replay. For merge acceptance, compare the candidate with the released cleaner over the same corpus and settings. When simplifying an existing rule, also compare with the branch baseline. Inspect every changed row for meaning. Keep raw logs and generated excerpts in ignored storage.
 
 TODO: Review the existing backtracking-regex path in a separate follow-up, including the `fancy-regex` dependency, backtrack limits, fail-open behavior, and failure log field. Keep that work separate from numeric and repetition-rule simplification.
 
@@ -354,7 +357,7 @@ Run daemon/IPC checks sequentially with isolated config, cache/runtime paths, an
 
 On macOS, an opt-in acoustic control plays two WAVs through the speakers and records them through the production CPAL/Rubato microphone path. It checks three successive captures (first WAV, second WAV, first WAV), retains only text and signal measurements, and can measure the real speaker cues. This does not synthesize or validate the physical global hotkey. Use public speech WAVs, an active desktop with microphone permission, and repository-local model, WAV, and report paths. The report file must already exist.
 
-Check fixture signal levels before acoustic runs: the WAV helper can recognize files that are too quiet for speaker playback. Use level-adjusted playback copies as needed and record the source hash and gain.
+Check fixture signal levels before acoustic runs. Create level-adjusted playback copies as needed and record the source fixture and gain.
 
 ```bash
 mkdir -p target/tmp/live-audio
