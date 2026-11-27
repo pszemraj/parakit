@@ -303,16 +303,18 @@ fn carry_question(text: &mut String, from: usize) {
     text.insert(insert_at(text, text.len()), '?');
 }
 
-/// Whether the sentence that `left` begins opens as an inverted question: an auxiliary
-/// (`Do you`), a wh-word followed by an auxiliary (`Where did`), or a wh-word with an
+/// Whether the sentence that `left` begins opens as an inverted question: an auxiliary or
+/// its negative contraction followed by a subject (`Do you`, `Shouldn't we`, `Is the`), a
+/// wh-word followed by an auxiliary (`Where did`, `Why didn't`), or a wh-word with an
 /// attached `'s`, `'re`, `'ll`, or `'d` (`What's`). A wh-word also opens statements such
 /// as `What I need is`, so any other wh-word does not count.
 fn opens_question(left: &str) -> bool {
     let text = left.trim_start_matches(|c: char| !c.is_alphabetic());
-    let opener = first_word(text);
-    if in_class(opener, AUXILIARIES) {
-        return true;
+    let opener = word_with_apostrophes(text);
+    if let Some(auxiliary) = auxiliary(opener) {
+        return subject_follows(auxiliary, &text[opener.len()..]);
     }
+    let opener = first_word(text);
     if !in_class(opener, WH_WORDS) {
         return false;
     }
@@ -321,10 +323,49 @@ fn opens_question(left: &str) -> bool {
         .strip_prefix(['\'', '’'])
         .is_some_and(|suffix| in_class(first_word(suffix), &["s", "re", "ll", "d"]));
     contraction
-        || in_class(
-            first_word(rest.trim_start_matches(char::is_whitespace)),
-            AUXILIARIES,
-        )
+        || auxiliary(word_with_apostrophes(
+            rest.trim_start_matches(char::is_whitespace),
+        ))
+        .is_some()
+}
+
+/// The auxiliary that `token` spells: a word of the class, or its negative contraction,
+/// where `ca`, `wo`, and `sha` stand for the irregular stems of `can't`, `won't`, and
+/// `shan't`.
+fn auxiliary(token: &str) -> Option<&str> {
+    let negated = token
+        .strip_suffix(['t', 'T'])
+        .and_then(|stem| stem.strip_suffix(['\'', '’']))
+        .and_then(|stem| stem.strip_suffix(['n', 'N']));
+    let word = negated.unwrap_or(token);
+    let irregular = [("ca", "can"), ("wo", "will"), ("sha", "shall")]
+        .into_iter()
+        .find(|&(stem, _)| negated.is_some() && in_class(word, &[stem]));
+    let word = irregular.map_or(word, |(_, name)| name);
+    in_class(word, AUXILIARIES).then_some(word)
+}
+
+/// Whether `text` starts the subject of an inverted question opened by `auxiliary`: a
+/// subject pronoun, an article or possessive, a demonstrative, or `there`. Base-form `do`
+/// and `have` also open imperatives (`Do the dishes`, `Have it ready`), so after them only
+/// a pronoun that cannot be an object counts.
+fn subject_follows(auxiliary: &str, text: &str) -> bool {
+    let text = text.trim_start_matches(char::is_whitespace);
+    let word = first_word(text);
+    if in_class(auxiliary, &["do", "have"]) {
+        return in_class(word, SUBJECTS) || in_class(word, &["you"]);
+    }
+    subject(text)
+        || in_class(word, DETERMINERS)
+        || in_class(word, &["this", "that", "these", "those", "there"])
+}
+
+/// The word at the start of `text`, with the apostrophes inside it (`Shouldn’t`).
+fn word_with_apostrophes(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !(c.is_alphabetic() || matches!(c, '\'' | '’')))
+        .unwrap_or(text.len());
+    &text[..end]
 }
 
 fn first_word(text: &str) -> &str {

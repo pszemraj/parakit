@@ -203,3 +203,62 @@ fn a_boundary_merged_earlier_in_the_pass_does_not_cut_the_question() {
         ),
     ]);
 }
+
+#[test]
+fn an_auxiliary_and_a_subject_open_an_inverted_question() {
+    assert_messaging_cases(&[
+        // A subject pronoun, an article or possessive, a demonstrative, or `there` follows.
+        ("Do you want tea or? Coffee.", "Do you want tea or coffee?"),
+        ("Is the? Build ready.", "Is the build ready?"),
+        ("Did the? Tests pass.", "Did the tests pass?"),
+        ("Is that the? Plan.", "Is that the plan?"),
+        ("Is there an? Answer.", "Is there an answer?"),
+        ("May I take the? Last one.", "May I take the last one?"),
+        ("Does it have the? Thing.", "Does it have the thing?"),
+        // A negative contraction of the auxiliary, with either apostrophe.
+        (
+            "Shouldn\u{2019}t we take the? Train.",
+            "Shouldn\u{2019}t we take the train?",
+        ),
+        (
+            "Shouldn't we take the? Train.",
+            "Shouldn't we take the train?",
+        ),
+        ("Can't we take the? Train.", "Can't we take the train?"),
+        ("Won't you try the? Soup.", "Won't you try the soup?"),
+        ("Shan't we take the? Train.", "Shan't we take the train?"),
+        ("Don't you want the? Tea.", "Don't you want the tea?"),
+        // A wh-word followed by a contracted auxiliary needs no subject check.
+        ("Why didn't the? Build run.", "Why didn't the build run?"),
+        ("What's the? Plan.", "What's the plan?"),
+        // The filler path shares the rule.
+        (
+            "Shouldn\u{2019}t we take the um? Train.",
+            "Shouldn\u{2019}t we take the train?",
+        ),
+    ]);
+}
+
+#[test]
+fn imperatives_names_and_open_class_subjects_do_not_open_a_question() {
+    assert_messaging_cases(&[
+        // Base-form `do` and `have` open imperatives, so only a subject pronoun follows them.
+        ("Do the? Dishes before bed.", "Do the dishes before bed"),
+        ("Do this before the? Meeting.", "Do this before the meeting"),
+        (
+            "Have it ready by the? Morning.",
+            "Have it ready by the morning",
+        ),
+        ("Don't forget the? Charger.", "Don't forget the charger"),
+        ("Do the um? Dishes before bed.", "Do the dishes before bed"),
+        // A name that spells an auxiliary opens a statement.
+        ("Will said the? Build failed.", "Will said the build failed"),
+        // An open-class subject is not one that the closed classes recognize.
+        ("Is Peter coming or? Not.", "Is Peter coming or not"),
+        ("Does Peter want the? Soup.", "Does Peter want the soup"),
+        // An all-caps token is an abbreviation, not an auxiliary.
+        ("DON'T we take the? Train.", "DON'T we take the train"),
+        // An auxiliary that no subject follows is not an inverted question.
+        ("Can't take the? Train.", "Can't take the train"),
+    ]);
+}
