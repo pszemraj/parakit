@@ -75,7 +75,7 @@ pub use user::{RulePosition, UserRule};
 
 /// Schema/behavior version recorded in transcription logs.
 /// Keep revisions distinct even when their package version is unchanged.
-pub const CLEANER_VERSION: u32 = 65;
+pub const CLEANER_VERSION: u32 = 66;
 
 /// Default minimum spoken cardinal or ordinal converted to digits when
 /// `cleaning.number_threshold` is left unset.

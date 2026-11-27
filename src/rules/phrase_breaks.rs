@@ -102,7 +102,7 @@ pub(super) fn merge_sentence_breaks(input: &str) -> TransformResult<'_> {
     apply_edits(input, edits)
 }
 
-/// Remove commas inside a phrase unless another soon closes an aside.
+/// Remove commas inside a phrase unless a later comma of the sentence closes an aside.
 ///
 /// # Returns
 /// The repaired text and number of commas removed.
@@ -126,15 +126,25 @@ pub(super) fn remove_function_word_commas(input: &str) -> TransformResult<'_> {
         let mark = captures.name("mark").unwrap();
         let left = last_sentence(&input[..mark.start()]);
         let right = &text[captures.get(0).unwrap().end()..];
+        let initial = left.trim() == word;
         // Conjunctions often open a clause with an aside. A subordinator that does not
         // start its sentence still joins a clause that starts with a pronoun.
         let opener = in_class(word, COORDINATORS)
-            || (in_class(word, SUBORDINATORS) && (left.trim() == word || !subject(right)));
-        let aside = right
-            .split_whitespace()
-            .take(2)
-            .any(|token| token.ends_with(','));
-        if !opener && !aside && joins(left, ",", right) {
+            || (in_class(word, SUBORDINATORS) && (initial || !subject(right)));
+        // Between a sentence's opening subject pronoun and its verb an aside can be a
+        // whole phrase (`They, tired from the trip, went home`), so any comma that ends
+        // it before the clause does closes one. Inside a noun or prepositional phrase an
+        // aside is a word or two (`my, frankly, terrible advice`), so its closing comma
+        // must be among the next two tokens.
+        let aside = if initial && in_class(word, SUBJECTS) {
+            closes_aside(&text, captures.get(0).unwrap().end())
+        } else {
+            right
+                .split_whitespace()
+                .take(2)
+                .any(|token| token.ends_with(','))
+        };
+        if !opener && joins(left, ",", right) && !aside {
             text.to_mut().remove(mark.start());
             matches += 1;
         }
@@ -406,6 +416,36 @@ fn sentence_start(input: &str, end: usize, merge: Option<&Merge>) -> usize {
     }
 }
 
+/// Whether the first comma after `from` closes an aside that began before it. A comma
+/// before a coordinator, a subordinator, or a wh-word ends the clause instead, so nothing
+/// beyond it can close the aside, and neither can a sentence end or a line break.
+fn closes_aside(text: &str, from: usize) -> bool {
+    for (i, c) in text[from..].char_indices().map(|(i, c)| (from + i, c)) {
+        if ends_sentence(text, i, c) {
+            return false;
+        }
+        let rest = &text[i + c.len_utf8()..];
+        if c == ',' && (rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+            let next = first_word(rest.trim_start());
+            return ![COORDINATORS, SUBORDINATORS, WH_WORDS]
+                .iter()
+                .any(|class| in_class(next, class));
+        }
+    }
+    false
+}
+
+/// Whether the character `c` at byte `i` of `text` ends a sentence: a line break, or a
+/// terminal that is a sentence boundary and is followed, past any closing quotes or
+/// brackets, by whitespace.
+fn ends_sentence(text: &str, i: usize, c: char) -> bool {
+    c == '\n'
+        || (punctuation_is_sentence_boundary(text, i, c)
+            && text[i + c.len_utf8()..]
+                .trim_start_matches(CLOSERS)
+                .starts_with(char::is_whitespace))
+}
+
 /// The text after the last sentence boundary.
 fn last_sentence(text: &str) -> &str {
     &text[last_sentence_start(text)..]
@@ -414,13 +454,7 @@ fn last_sentence(text: &str) -> &str {
 /// The offset after the last sentence boundary of `text`.
 fn last_sentence_start(text: &str) -> usize {
     text.char_indices()
-        .rfind(|&(i, c)| {
-            c == '\n'
-                || (punctuation_is_sentence_boundary(text, i, c)
-                    && text[i + 1..]
-                        .trim_start_matches(CLOSERS)
-                        .starts_with(char::is_whitespace))
-        })
+        .rfind(|&(i, c)| ends_sentence(text, i, c))
         .map_or(0, |(i, _)| i + 1)
 }
 

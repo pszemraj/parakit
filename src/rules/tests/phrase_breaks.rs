@@ -654,6 +654,77 @@ fn function_word_commas_need_an_unfinished_phrase() {
 }
 
 #[test]
+fn commas_pair_around_asides_by_where_the_clause_ends() {
+    assert_clean_cases(
+        CleaningProfile::Safe,
+        &[
+            // After a sentence's opening subject pronoun an aside can be a whole phrase.
+            (
+                "They, tired from the trip, went straight home.",
+                "They, tired from the trip, went straight home.",
+            ),
+            (
+                "They, who were tired, went home.",
+                "They, who were tired, went home.",
+            ),
+            (
+                "They, tired e.g. from the trip, went home.",
+                "They, tired e.g. from the trip, went home.",
+            ),
+            // A comma before a coordinator, subordinator, or wh-word ends the clause, so
+            // nothing beyond it closes the aside.
+            (
+                "We, went to the store, and bought milk.",
+                "We went to the store, and bought milk.",
+            ),
+            (
+                "We, went to the store, but bought milk, eggs, and bread.",
+                "We went to the store, but bought milk, eggs, and bread.",
+            ),
+            (
+                "We, went home, because it rained.",
+                "We went home, because it rained.",
+            ),
+            (
+                "They, tired from the trip, and hungry, went home.",
+                "They tired from the trip, and hungry, went home.",
+            ),
+            // A later sentence or line does not close it, and a number is not a comma.
+            (
+                "We, went home. Then, we slept.",
+                "We went home. Then, we slept.",
+            ),
+            (
+                "We, went home\nThen, we slept.",
+                "We went home\nThen, we slept.",
+            ),
+            (
+                "We, paid 1,000 dollars today.",
+                "We paid 1,000 dollars today.",
+            ),
+            // Elsewhere an aside is a word or two, so only a nearby comma closes it.
+            (
+                "It was my, frankly, terrible advice.",
+                "It was my, frankly, terrible advice.",
+            ),
+            (
+                "Wait until we, run through the tests we have, in order.",
+                "Wait until we run through the tests we have, in order.",
+            ),
+            (
+                "On the, PR that's open, for this branch.",
+                "On the PR that's open, for this branch.",
+            ),
+            // A comma already removed by the right-to-left scan cannot close an aside.
+            (
+                "The walls of, the, old house.",
+                "The walls of the old house.",
+            ),
+        ],
+    );
+}
+
+#[test]
 fn filler_terminals_stay_when_the_next_word_embeds_a_filler() {
     // The continuation word can hold a filler (`Store-um`), so merging into it would
     // reach into the next filler match.

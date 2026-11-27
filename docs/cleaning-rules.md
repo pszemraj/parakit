@@ -61,7 +61,7 @@ The only merge into a following clause is the relative clause split after `which
 
 After a merge, the next word loses its sentence-initial capital. The pass preserves `I` and its contractions, acronyms and other mixed-case tokens, dotted tokens, and English weekday and month names except `March` and `May`. Use [word replacements](#word-replacements) for personal names.
 
-Comma removal uses the same evidence. It repairs `the, larger file` and `of, a pile` while preserving a pair of commas around an aside, as in `my, frankly, terrible advice`. A coordinator keeps its comma. A subordinator keeps it at the start of a sentence, and elsewhere loses it only before a pronoun subject (`because, it was raining`, but `because, the roof leaked`). Single-letter labels such as `A, then B` are left alone.
+Comma removal uses the same evidence. It repairs `the, larger file` and `of, a pile` while preserving a pair of commas around an aside, as in `my, frankly, terrible advice`. Inside a noun or prepositional phrase an aside is a word or two, so only a comma within the next two words closes it. After the subject pronoun that opens a sentence an aside can be a whole phrase, as in `They, tired from the trip, went straight home`, so the next comma closes it, unless that comma comes before a coordinator, a subordinator, or a wh-word, which ends the clause (`We, went to the store, and bought milk` loses its first comma). A comma in the next sentence or on the next line does not close it. A coordinator keeps its comma. A subordinator keeps it at the start of a sentence, and elsewhere loses it only before a pronoun subject (`because, it was raining`, but `because, the roof leaked`). Single-letter labels such as `A, then B` are left alone.
 
 ### Filled Pauses
 
