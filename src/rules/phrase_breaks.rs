@@ -287,14 +287,18 @@ fn apply_edits(input: &str, edits: Vec<Edit>) -> TransformResult<'_> {
 
 /// Turn the period that ends the sentence at `from` into a question mark. A sentence that
 /// ends in `?` or `!`, or in an ellipsis, stays; one without a terminal gets `?` after its
-/// last word, inside any quote or bracket that closes it.
+/// last word, inside the quotes and brackets that enclose the question.
 fn carry_question(text: &mut String, from: usize) {
     let ends = |rest: &str| {
         let rest = rest.trim_start_matches(CLOSERS);
         rest.is_empty() || rest.starts_with(char::is_whitespace)
     };
-    let insert_at =
-        |text: &str, to: usize| from + text[from..to].trim_end().trim_end_matches(CLOSERS).len();
+    // Merged boundaries are already gone from `text`, so this is the whole question.
+    let start = last_sentence_start(&text[..from]);
+    let insert_at = |text: &str, to: usize| {
+        let to = from + text[from..to].trim_end().len();
+        to - enclosing_closers(&text[start..to])
+    };
     for (i, c) in text[from..].char_indices().map(|(i, c)| (from + i, c)) {
         if c == '\n' {
             text.insert(insert_at(text, i), '?');
@@ -316,6 +320,43 @@ fn carry_question(text: &mut String, from: usize) {
         }
     }
     text.insert(insert_at(text, text.len()), '?');
+}
+
+/// The byte length of the closing quotes and brackets at the end of `sentence` that enclose
+/// it. A closer encloses the sentence only when its matching opener is among the delimiters
+/// before the sentence's first letter. Those openers pair from the outside in with the
+/// closers from the end (`“` with `”`, `‘` with `’`, `(` with `)`, `[` with `]`, `{` with
+/// `}`, and a straight `"` or `'` with itself), and the pairing stops at the first
+/// mismatch. A closer that matches no such opener ends a phrase inside the sentence or a
+/// plural possessive, so the question mark follows it: `“Do you want tea or coffee from
+/// “Central Perk”?”` and `Do you want the cats’?`.
+fn enclosing_closers(sentence: &str) -> usize {
+    let openers = sentence
+        .chars()
+        .take_while(|c| !c.is_alphabetic())
+        .filter(|&c| closer_of(c).is_some());
+    let mut closers = sentence.chars().rev().take_while(|c| CLOSERS.contains(c));
+    let mut len = 0;
+    for opener in openers {
+        match closers.next() {
+            Some(closer) if closer_of(opener) == Some(closer) => len += closer.len_utf8(),
+            _ => break,
+        }
+    }
+    len
+}
+
+/// The closing quote or bracket that matches `opener`.
+fn closer_of(opener: char) -> Option<char> {
+    match opener {
+        '“' => Some('”'),
+        '‘' => Some('’'),
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '"' | '\'' => Some(opener),
+        _ => None,
+    }
 }
 
 /// Whether the sentence that `left` begins opens as an inverted question: an auxiliary or

@@ -324,3 +324,72 @@ fn an_ellipsis_ends_a_question_as_it_is() {
         ),
     ]);
 }
+
+#[test]
+fn a_carried_question_mark_goes_inside_only_the_closers_that_enclose_the_question() {
+    assert_messaging_cases(&[
+        // A closer whose opener is not before the first letter ends a phrase inside it.
+        (
+            "Do you want tea or? Coffee from \u{201c}Central Perk\u{201d}",
+            "Do you want tea or coffee from \u{201c}Central Perk\u{201d}?",
+        ),
+        (
+            "\u{201c}Do you want tea or? Coffee from \u{201c}Central Perk\u{201d}\u{201d}",
+            "\u{201c}Do you want tea or coffee from \u{201c}Central Perk\u{201d}?\u{201d}",
+        ),
+        (
+            "\u{201c}Do you want tea or? Coffee from \u{201c}Central Perk\u{201d}\u{201d}\nMore text.",
+            "\u{201c}Do you want tea or coffee from \u{201c}Central Perk\u{201d}?\u{201d}\nMore text",
+        ),
+        (
+            "Do you want tea or? Coffee from \"Central Perk\"",
+            "Do you want tea or coffee from \"Central Perk\"?",
+        ),
+        // A plural possessive is not a closing quote.
+        (
+            "Do you want the dogs or? The cats\u{2019}",
+            "Do you want the dogs or the cats\u{2019}?",
+        ),
+        // The closer that the continuation word absorbs still encloses the question.
+        (
+            "\u{2018}Do you want tea or? Coffee\u{2019}",
+            "\u{2018}Do you want tea or coffee?\u{2019}",
+        ),
+        (
+            "\u{2018}Do you want tea or? Coffee\u{2019}\nMore text.",
+            "\u{2018}Do you want tea or coffee?\u{2019}\nMore text",
+        ),
+        // Openers pair from the outside in, each with its own closer.
+        (
+            "\u{201c}Do you want tea or? Coffee\u{201d}",
+            "\u{201c}Do you want tea or coffee?\u{201d}",
+        ),
+        (
+            "(Do you want tea or? Coffee)",
+            "(Do you want tea or coffee?)",
+        ),
+        (
+            "\"Do you want tea or? Coffee\"",
+            "\"Do you want tea or coffee?\"",
+        ),
+        (
+            "'Do you want tea or? Coffee'",
+            "'Do you want tea or coffee?'",
+        ),
+        (
+            "\u{201c}\u{2018}Do you want tea or? Coffee\u{2019}\u{201d}",
+            "\u{201c}\u{2018}Do you want tea or coffee?\u{2019}\u{201d}",
+        ),
+        (
+            "\u{201c}(Do you want tea or? Coffee)\u{201d}",
+            "\u{201c}(Do you want tea or coffee?)\u{201d}",
+        ),
+        // A closer that does not match its opener stays before the mark.
+        (
+            "\u{201c}Do you want tea or? Coffee)\u{201d}",
+            "\u{201c}Do you want tea or coffee)?\u{201d}",
+        ),
+        // Without closers the mark ends the text or the line.
+        ("Do you want tea or? Coffee", "Do you want tea or coffee?"),
+    ]);
+}
