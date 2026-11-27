@@ -288,3 +288,39 @@ fn a_negated_do_or_have_takes_the_full_subject_set() {
         ("Have you the? Time.", "Have you the time?"),
     ]);
 }
+
+#[test]
+fn an_ellipsis_ends_a_question_as_it_is() {
+    assert_messaging_cases(&[
+        // The ASCII and the Unicode ellipsis end the sentence, so no mark is carried.
+        (
+            "Do you want tea or? Coffee... I can make some.",
+            "Do you want tea or coffee... I can make some",
+        ),
+        (
+            "Do you want tea or? Coffee\u{2026} I can make some.",
+            "Do you want tea or coffee\u{2026} I can make some",
+        ),
+        (
+            "Do you want tea or? Coffee...",
+            "Do you want tea or coffee...",
+        ),
+        (
+            "Do you want tea or? Coffee\u{2026}",
+            "Do you want tea or coffee\u{2026}",
+        ),
+        (
+            "Do you want tea or? Coffee\u{2026}\u{201d} she asked.",
+            "Do you want tea or coffee\u{2026}\u{201d} she asked",
+        ),
+        (
+            "Do you want tea or? Coffee\u{2026}\nMore text.",
+            "Do you want tea or coffee\u{2026}\nMore text",
+        ),
+        // An ellipsis inside a sentence does not end it.
+        (
+            "Do you want tea or? Coffee\u{2026}and tea. Thanks.",
+            "Do you want tea or coffee\u{2026}and tea? Thanks",
+        ),
+    ]);
+}

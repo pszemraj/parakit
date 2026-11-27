@@ -300,9 +300,14 @@ fn carry_question(text: &mut String, from: usize) {
             text.insert(insert_at(text, i), '?');
             return;
         }
+        let rest = &text[i + c.len_utf8()..];
+        // An ellipsis ends the sentence as it is, whether typed as dots or as `…`.
+        if c == '…' && ends(rest) {
+            return;
+        }
         if matches!(c, '.' | '?' | '!')
             && punctuation_is_sentence_boundary(text, i, c)
-            && ends(&text[i + 1..])
+            && ends(rest)
         {
             if c == '.' && !text[..i].ends_with('.') {
                 text.replace_range(i..=i, "?");
