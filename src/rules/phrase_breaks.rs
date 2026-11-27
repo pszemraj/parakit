@@ -304,37 +304,23 @@ fn apply_edits(input: &str, edits: Vec<Edit>) -> TransformResult<'_> {
 /// ends in `?` or `!`, or in an ellipsis, stays; one without a terminal gets `?` after its
 /// last word, inside the quotes and brackets that enclose the question.
 fn carry_question(text: &mut String, from: usize) {
-    let ends = |rest: &str| {
-        let rest = rest.trim_start_matches(CLOSERS);
-        rest.is_empty() || rest.starts_with(char::is_whitespace)
-    };
     // Merged boundaries are already gone from `text`, so this is the whole question.
     let start = last_sentence_start(&text[..from]);
     let insert_at = |text: &str, to: usize| {
         let to = from + text[from..to].trim_end().len();
         to - enclosing_closers(&text[start..to])
     };
-    for (i, c) in text[from..].char_indices().map(|(i, c)| (from + i, c)) {
-        if c == '\n' {
-            text.insert(insert_at(text, i), '?');
-            return;
-        }
-        let rest = &text[i + c.len_utf8()..];
-        // An ellipsis ends the sentence as it is, whether typed as dots or as `…`.
-        if c == '…' && ends(rest) {
-            return;
-        }
-        if matches!(c, '.' | '?' | '!')
-            && punctuation_is_sentence_boundary(text, i, c)
-            && ends(rest)
-        {
-            if c == '.' && !text[..i].ends_with('.') {
-                text.replace_range(i..=i, "?");
-            }
-            return;
-        }
+    let end = text[from..]
+        .char_indices()
+        .map(|(i, c)| (from + i, c))
+        .find(|&(i, c)| ends_sentence(text, i, c));
+    match end {
+        Some((i, '\n')) => text.insert(insert_at(text, i), '?'),
+        // The last dot of an ASCII ellipsis follows another dot and stays.
+        Some((i, '.')) if !text[..i].ends_with('.') => text.replace_range(i..=i, "?"),
+        Some(_) => {}
+        None => text.insert(insert_at(text, text.len()), '?'),
     }
-    text.insert(insert_at(text, text.len()), '?');
 }
 
 /// The byte length of the closing quotes and brackets at the end of `sentence` that enclose
@@ -504,14 +490,19 @@ fn closes_aside(text: &str, from: usize) -> bool {
 }
 
 /// Whether the character `c` at byte `i` of `text` ends a sentence: a line break, or a
-/// terminal that is a sentence boundary and is followed, past any closing quotes or
-/// brackets, by whitespace.
+/// terminal that is a sentence boundary, or an ellipsis character (`…`), and that is
+/// followed, past any closing quotes or brackets, by whitespace or the end of `text`. The
+/// scan before a mark and the scan after it both use this rule, so a run of `...` and a
+/// single `…` end a sentence alike.
 fn ends_sentence(text: &str, i: usize, c: char) -> bool {
-    c == '\n'
-        || (punctuation_is_sentence_boundary(text, i, c)
-            && text[i + c.len_utf8()..]
-                .trim_start_matches(CLOSERS)
-                .starts_with(char::is_whitespace))
+    if c == '\n' {
+        return true;
+    }
+    if c != '…' && !punctuation_is_sentence_boundary(text, i, c) {
+        return false;
+    }
+    let rest = text[i + c.len_utf8()..].trim_start_matches(CLOSERS);
+    rest.is_empty() || rest.starts_with(char::is_whitespace)
 }
 
 /// The text after the last sentence boundary.
@@ -523,7 +514,7 @@ fn last_sentence(text: &str) -> &str {
 fn last_sentence_start(text: &str) -> usize {
     text.char_indices()
         .rfind(|&(i, c)| ends_sentence(text, i, c))
-        .map_or(0, |(i, _)| i + 1)
+        .map_or(0, |(i, c)| i + c.len_utf8())
 }
 
 /// Whether the last word of `left` is unfinished and `right` can complete it.

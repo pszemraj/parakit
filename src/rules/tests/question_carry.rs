@@ -4,7 +4,7 @@ use super::*;
 
 /// Cleans each case with the default dictation settings, which drop one final period, and
 /// checks that the output is stable.
-fn assert_messaging_cases(cases: &[(&str, &str)]) {
+pub(super) fn assert_messaging_cases(cases: &[(&str, &str)]) {
     let cleaner = cleaner_messaging_default(CleaningProfile::Safe);
     for (input, expected) in cases {
         assert_eq!(cleaner.clean_text(input), *expected, "input {input:?}");
