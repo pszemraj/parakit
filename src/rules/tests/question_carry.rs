@@ -262,3 +262,29 @@ fn imperatives_names_and_open_class_subjects_do_not_open_a_question() {
         ("Can't take the? Train.", "Can't take the train"),
     ]);
 }
+
+#[test]
+fn a_negated_do_or_have_takes_the_full_subject_set() {
+    assert_messaging_cases(&[
+        // Only the affirmative base forms open imperatives, so a negated one takes any subject.
+        (
+            "Haven\u{2019}t the? Tests finished yet.",
+            "Haven\u{2019}t the tests finished yet?",
+        ),
+        (
+            "Haven't the? Tests finished yet.",
+            "Haven't the tests finished yet?",
+        ),
+        ("Don't the? Kids need coats.", "Don't the kids need coats?"),
+        ("Haven't you the? Time.", "Haven't you the time?"),
+        // A negative imperative takes a verb, which is not a subject.
+        ("Don't forget the? Charger.", "Don't forget the charger"),
+        // The affirmative forms keep the restriction.
+        ("Do the? Dishes before bed.", "Do the dishes before bed"),
+        (
+            "Have it ready by the? Morning.",
+            "Have it ready by the morning",
+        ),
+        ("Have you the? Time.", "Have you the time?"),
+    ]);
+}

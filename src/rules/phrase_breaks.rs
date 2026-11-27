@@ -321,8 +321,8 @@ fn carry_question(text: &mut String, from: usize) {
 fn opens_question(left: &str) -> bool {
     let text = from_first_letter(left);
     let opener = word_with_apostrophes(text);
-    if let Some(auxiliary) = auxiliary(opener) {
-        return subject_follows(auxiliary, &text[opener.len()..]);
+    if let Some((auxiliary, negated)) = auxiliary(opener) {
+        return subject_follows(auxiliary, negated, &text[opener.len()..]);
     }
     let opener = first_word(text);
     if !in_class(opener, WH_WORDS) {
@@ -339,10 +339,10 @@ fn opens_question(left: &str) -> bool {
         .is_some()
 }
 
-/// The auxiliary that `token` spells: a word of the class, or its negative contraction,
-/// where `ca`, `wo`, and `sha` stand for the irregular stems of `can't`, `won't`, and
-/// `shan't`.
-fn auxiliary(token: &str) -> Option<&str> {
+/// The auxiliary that `token` spells, and whether it is negated: a word of the class, or
+/// its negative contraction, where `ca`, `wo`, and `sha` stand for the irregular stems of
+/// `can't`, `won't`, and `shan't`.
+fn auxiliary(token: &str) -> Option<(&str, bool)> {
     let negated = token
         .strip_suffix(['t', 'T'])
         .and_then(|stem| stem.strip_suffix(['\'', '’']))
@@ -352,17 +352,18 @@ fn auxiliary(token: &str) -> Option<&str> {
         .into_iter()
         .find(|&(stem, _)| negated.is_some() && in_class(word, &[stem]));
     let word = irregular.map_or(word, |(_, name)| name);
-    in_class(word, AUXILIARIES).then_some(word)
+    in_class(word, AUXILIARIES).then_some((word, negated.is_some()))
 }
 
 /// Whether `text` starts the subject of an inverted question opened by `auxiliary`: a
-/// subject pronoun, an article or possessive, a demonstrative, or `there`. Base-form `do`
-/// and `have` also open imperatives (`Do the dishes`, `Have it ready`), so after them only
-/// a pronoun that cannot be an object counts.
-fn subject_follows(auxiliary: &str, text: &str) -> bool {
+/// subject pronoun, an article or possessive, a demonstrative, or `there`. Affirmative
+/// base-form `do` and `have` also open imperatives (`Do the dishes`, `Have it ready`), so
+/// after them only a pronoun that cannot be an object counts. A negated one never opens
+/// an imperative with a subject, and `Don't forget` fails the subject check anyway.
+fn subject_follows(auxiliary: &str, negated: bool, text: &str) -> bool {
     let text = text.trim_start_matches(char::is_whitespace);
     let word = first_word(text);
-    if in_class(auxiliary, &["do", "have"]) {
+    if !negated && in_class(auxiliary, &["do", "have"]) {
         return in_class(word, SUBJECTS) || in_class(word, &["you"]);
     }
     subject(text)
